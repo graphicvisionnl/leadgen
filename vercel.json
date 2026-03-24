@@ -4,11 +4,5 @@
       "path": "/api/cron/daily-run",
       "schedule": "0 9 * * 1-5"
     }
-  ],
-  "functions": {
-    "api/pipeline/phase1": { "maxDuration": 60 },
-    "api/pipeline/phase2": { "maxDuration": 60 },
-    "api/pipeline/phase3": { "maxDuration": 60 },
-    "api/pipeline/phase4": { "maxDuration": 60 }
-  }
+  ]
 }
