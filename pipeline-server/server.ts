@@ -27,9 +27,14 @@ const supabase = createClient(
 )
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Log buffer ───────────────────────────────────────────────────────────────
+const logBuffer: string[] = []
+
 function log(phase: string, msg: string) {
-  console.log(`[${new Date().toISOString()}] [${phase}] ${msg}`)
+  const line = `[${new Date().toISOString()}] [${phase}] ${msg}`
+  console.log(line)
+  logBuffer.push(line)
+  if (logBuffer.length > 300) logBuffer.shift()
 }
 
 function normalizeUrl(url: string): string {
@@ -322,6 +327,26 @@ async function phase4(runId: string) {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_, res) => res.json({ ok: true, uptime: process.uptime() }))
+
+app.get('/logs', (req, res) => {
+  const since = req.query.since ? parseInt(req.query.since as string) : 0
+  res.json({ logs: logBuffer.slice(since), total: logBuffer.length })
+})
+
+app.post('/run/phase2', async (_, res) => {
+  res.json({ success: true, message: 'Phase 2 gestart' })
+  phase2('manual').catch(e => log('Phase 2', `Fout: ${e}`))
+})
+
+app.post('/run/phase3', async (_, res) => {
+  res.json({ success: true, message: 'Phase 3 gestart' })
+  phase3('manual').catch(e => log('Phase 3', `Fout: ${e}`))
+})
+
+app.post('/run/phase4', async (_, res) => {
+  res.json({ success: true, message: 'Phase 4 gestart' })
+  phase4('manual').catch(e => log('Phase 4', `Fout: ${e}`))
+})
 
 app.post('/run', async (req, res) => {
   const { niche, city, maxLeads = 10 } = req.body
