@@ -34,6 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/" className="text-white/60 hover:text-white transition-colors">
                 Dashboard
               </Link>
+              <Link href="/previews" className="text-white/60 hover:text-white transition-colors">
+                Previews
+              </Link>
               <Link href="/settings" className="text-white/60 hover:text-white transition-colors">
                 Instellingen
               </Link>

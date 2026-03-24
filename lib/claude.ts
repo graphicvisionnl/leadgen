@@ -1,5 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { QualificationResult } from '@/types'
+
+function loadSkill(filename: string): string {
+  try {
+    return readFileSync(join(process.cwd(), 'lib/skills', filename), 'utf-8')
+  } catch {
+    return ''
+  }
+}
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -65,7 +75,7 @@ Antwoord ALLEEN in dit exacte JSON-formaat (geen markdown, geen uitleg):
   }
 }
 
-// Phase 3: Full HTML redesign generation
+// Phase 3: Full HTML redesign generation using taste-skill + redesign-skill
 export async function generateRedesignHTML(lead: {
   company_name: string
   niche: string
@@ -74,27 +84,46 @@ export async function generateRedesignHTML(lead: {
   google_rating: number | null
   review_count: number | null
 }): Promise<string> {
+  const tasteSkill = loadSkill('taste-skill.md')
+  const redesignSkill = loadSkill('redesign-skill.md')
+
+  const ratingLine = lead.google_rating
+    ? `- Google rating: ${lead.google_rating} sterren (${lead.review_count ?? 0} reviews) — vermeld dit prominent`
+    : ''
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 8096,
+    system: `You are a senior UI/UX engineer at a premium design agency. You generate single-file HTML websites that look hand-crafted, not AI-generated.
+
+${tasteSkill}
+
+${redesignSkill}`,
     messages: [
       {
         role: 'user',
-        content: `Genereer een premium single-file website redesign voor ${lead.company_name}, een ${lead.niche} bedrijf in ${lead.city}.
+        content: `Genereer een premium single-file website redesign voor:
 
-Eisen:
-- Volledig zelfstandig HTML bestand (alle CSS en JS inline, geen externe dependencies behalve Google Fonts CDN)
-- Modern 2024 design met schone typografie, veel witruimte
-- Hero sectie met een subtiele gradient waarbij #FF794F gebruikt wordt als accent kleur
-- Secties: Hero (naam + tagline + CTA knop), Diensten (3-4 diensten), Over ons, Contact
+Bedrijfsnaam: ${lead.company_name}
+Branche: ${lead.niche}
+Stad: ${lead.city}
+Huidige site: ${lead.website_url}
+${ratingLine}
+
+Technische eisen:
+- Volledig zelfstandig HTML bestand — alle CSS inline in <style>, minimale vanilla JS inline in <script>
+- Geen externe CSS frameworks (geen Bootstrap, Tailwind CDN). Alleen Google Fonts CDN toegestaan
 - Mobiel-responsief met CSS Grid/Flexbox
-- Subtiele CSS animaties (geen zware JS frameworks)
-- Professioneel kleurenpalet passend bij de ${lead.niche} branche
-- Floating badge rechtsboven: "Concept door Graphic Vision — graphicvision.nl"
-- Font: Inter van Google Fonts${lead.google_rating ? `\n- Vermelding van de Google rating: ${lead.google_rating} sterren (${lead.review_count ?? 0} reviews)` : ''}
+- Subtiele CSS @keyframes animaties voor entry effects
+- Floating badge rechtsonder: klein, subtiel — "Concept: Graphic Vision" met link naar graphicvision.nl
 
-Gebruik realistische placeholder content gebaseerd op het bedrijfstype.
-Return ALLEEN de volledige HTML, startend met <!DOCTYPE html>, geen markdown, geen uitleg.`,
+Secties (in volgorde):
+1. Hero — asymmetrisch, grote headline, sterke CTA knop ("Bel ons nu" of "Vraag offerte aan")
+2. Diensten — 3-4 specifieke diensten voor deze branche, geen generieke omschrijvingen
+3. Over ons — kort, lokaal verankerd (stad vermelden)
+4. Contact — telefoonnummer placeholder, adres placeholder, simpel formulier
+
+Return ALLEEN de volledige HTML startend met <!DOCTYPE html>. Geen markdown, geen uitleg, geen code blocks.`,
       },
     ],
   })
