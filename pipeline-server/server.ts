@@ -155,11 +155,7 @@ async function phase2(runId: string) {
       let email = lead.email
       if (!email) {
         email = await scrapeEmail(lead.website_url)
-        if (!email) {
-          await supabase.from('leads').update({ status: 'disqualified', qualify_reason: 'Geen e-mail gevonden' }).eq('id', lead.id)
-          continue
-        }
-        await supabase.from('leads').update({ email }).eq('id', lead.id)
+        if (email) await supabase.from('leads').update({ email }).eq('id', lead.id)
       }
 
       let screenshotBase64 = ''
