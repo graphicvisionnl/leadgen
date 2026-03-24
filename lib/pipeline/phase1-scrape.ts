@@ -1,0 +1,139 @@
+import { createServerSupabaseClient } from '@/lib/supabase'
+import { ApifyBusinessResult } from '@/types'
+
+function normalizeUrl(url: string): string {
+  if (!url.startsWith('http')) return `https://${url}`
+  return url
+}
+
+function isValidUrl(url: string): boolean {
+  try {
+    const u = new URL(normalizeUrl(url))
+    return u.hostname.includes('.')
+  } catch {
+    return false
+  }
+}
+
+export async function runScrapePhase(
+  runId: string,
+  niche: string,
+  city: string,
+  maxLeads: number = 30
+): Promise<number> {
+  const supabase = createServerSupabaseClient()
+  const token = process.env.APIFY_API_TOKEN!
+
+  // Start Apify actor run
+  // Actor: compass/google-maps-scraper (well-maintained Google Maps scraper with email extraction)
+  const startRes = await fetch(
+    `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${token}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        searchStringsArray: [`${niche} ${city}`],
+        maxCrawledPlacesPerSearch: maxLeads,
+        language: 'nl',
+        exportPlaceUrls: false,
+        includeHistogram: false,
+        includeOpeningHours: false,
+        includePeopleAlsoSearch: false,
+        scrapeContacts: true,
+      }),
+    }
+  )
+
+  if (!startRes.ok) {
+    const err = await startRes.text()
+    throw new Error(`Apify actor start failed: ${err}`)
+  }
+
+  const startData = await startRes.json()
+  const actorRunId: string = startData.data.id
+
+  console.log(`[Phase 1] Apify run started: ${actorRunId}`)
+
+  // Update pipeline run with Apify run ID for webhook matching
+  await supabase
+    .from('pipeline_runs')
+    .update({ apify_run_id: actorRunId } as never)
+    .eq('id', runId)
+
+  // Poll for completion (max ~2 min — suitable for smaller scrapes)
+  let runStatus = 'RUNNING'
+  let attempts = 0
+  const maxAttempts = 40 // 40 × 3s = 2 min
+
+  while (runStatus === 'RUNNING' && attempts < maxAttempts) {
+    await new Promise((r) => setTimeout(r, 3000))
+    const statusRes = await fetch(
+      `https://api.apify.com/v2/actor-runs/${actorRunId}?token=${token}`
+    )
+    const statusData = await statusRes.json()
+    runStatus = statusData.data.status
+    attempts++
+  }
+
+  if (runStatus !== 'SUCCEEDED') {
+    throw new Error(`Apify run ended with status: ${runStatus}`)
+  }
+
+  // Fetch dataset results
+  const resultsRes = await fetch(
+    `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=${maxLeads}`
+  )
+  const businesses: ApifyBusinessResult[] = await resultsRes.json()
+
+  console.log(`[Phase 1] Got ${businesses.length} businesses from Apify`)
+
+  // Check existing domains to avoid duplicates
+  const urls = businesses
+    .filter((b) => b.website && isValidUrl(b.website))
+    .map((b) => normalizeUrl(b.website!))
+
+  const { data: existing } = await supabase
+    .from('leads')
+    .select('website_url')
+    .in('website_url', urls)
+
+  const existingUrls = new Set((existing ?? []).map((e: { website_url: string }) => e.website_url))
+
+  // Build inserts — skip businesses without a website or already in DB
+  const toInsert = businesses
+    .filter((b) => b.website && isValidUrl(b.website))
+    .filter((b) => !existingUrls.has(normalizeUrl(b.website!)))
+    .map((b) => ({
+      company_name: b.title,
+      website_url: normalizeUrl(b.website!),
+      email: b.email ?? null,
+      city: b.city ?? city,
+      niche,
+      google_rating: b.totalScore ?? null,
+      review_count: b.reviewsCount ?? null,
+      status: b.email ? 'scraped' : 'no_email',
+      pipeline_run_id: runId,
+    }))
+
+  if (toInsert.length === 0) {
+    console.log('[Phase 1] No new leads to insert (all duplicates or no websites)')
+    return 0
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from('leads')
+    .insert(toInsert)
+    .select('id')
+
+  if (insertError) throw new Error(`Insert failed: ${insertError.message}`)
+
+  const count = inserted?.length ?? 0
+  console.log(`[Phase 1] Inserted ${count} new leads`)
+
+  await supabase
+    .from('pipeline_runs')
+    .update({ scraped_count: count })
+    .eq('id', runId)
+
+  return count
+}

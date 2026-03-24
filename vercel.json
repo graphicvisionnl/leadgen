@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/daily-run",
+      "schedule": "0 9 * * 1-5"
+    }
+  ],
+  "functions": {
+    "app/api/pipeline/**/*.ts": {
+      "maxDuration": 60
+    },
+    "app/api/cron/**/*.ts": {
+      "maxDuration": 10
+    }
+  }
+}
