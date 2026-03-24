@@ -6,11 +6,9 @@
     }
   ],
   "functions": {
-    "app/api/pipeline/**/*.ts": {
-      "maxDuration": 60
-    },
-    "app/api/cron/**/*.ts": {
-      "maxDuration": 10
-    }
+    "api/pipeline/phase1": { "maxDuration": 60 },
+    "api/pipeline/phase2": { "maxDuration": 60 },
+    "api/pipeline/phase3": { "maxDuration": 60 },
+    "api/pipeline/phase4": { "maxDuration": 60 }
   }
 }
