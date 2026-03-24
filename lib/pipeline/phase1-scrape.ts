@@ -55,10 +55,10 @@ export async function runScrapePhase(
     .update({ apify_run_id: actorRunId } as never)
     .eq('id', runId)
 
-  // Poll for completion (max ~2 min — suitable for smaller scrapes)
+  // Poll for completion — max 50s to stay within Vercel's 60s limit
   let runStatus = 'RUNNING'
   let attempts = 0
-  const maxAttempts = 40 // 40 × 3s = 2 min
+  const maxAttempts = 16 // 16 × 3s = 48s
 
   while (runStatus === 'RUNNING' && attempts < maxAttempts) {
     await new Promise((r) => setTimeout(r, 3000))
@@ -68,10 +68,19 @@ export async function runScrapePhase(
     const statusData = await statusRes.json()
     runStatus = statusData.data.status
     attempts++
+    console.log(`[Phase 1] Apify status: ${runStatus} (attempt ${attempts}/${maxAttempts})`)
   }
 
   if (runStatus !== 'SUCCEEDED') {
-    throw new Error(`Apify run ended with status: ${runStatus}`)
+    // If still running after timeout, save the actorRunId so it can be resumed
+    // The results endpoint will return partial data if available
+    console.warn(`[Phase 1] Apify run not finished (status: ${runStatus}) — fetching partial results`)
+    if (runStatus === 'RUNNING') {
+      // Wait 2 more seconds and try to get whatever results are available
+      await new Promise((r) => setTimeout(r, 2000))
+    } else {
+      throw new Error(`Apify run ended with status: ${runStatus}`)
+    }
   }
 
   // Fetch dataset results

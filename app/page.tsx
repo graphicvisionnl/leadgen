@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [isRunning, setIsRunning] = useState(false)
   const [runMessage, setRunMessage] = useState('')
+  const [phaseLoading, setPhaseLoading] = useState<string | null>(null)
   const [niche, setNiche] = useState('')
   const [city, setCity] = useState('')
   const [maxLeads, setMaxLeads] = useState(30)
@@ -60,6 +61,26 @@ export default function Dashboard() {
     }, 5000)
     return () => clearInterval(interval)
   }, [isRunning, fetchLeads, fetchStats])
+
+  async function triggerPhase(phase: string, body: object = {}) {
+    setPhaseLoading(phase)
+    setRunMessage('')
+    try {
+      const res = await fetch(`/api/pipeline/${phase}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: 'manual', ...body }),
+      })
+      const data = await res.json()
+      setRunMessage(`Phase ${phase}: ${JSON.stringify(data)}`)
+      fetchLeads()
+      fetchStats()
+    } catch (err) {
+      setRunMessage(`Fout: ${String(err)}`)
+    } finally {
+      setPhaseLoading(null)
+    }
+  }
 
   async function triggerPipeline() {
     if (!niche || !city) {
@@ -144,8 +165,32 @@ export default function Dashboard() {
           </button>
         </div>
         {runMessage && (
-          <p className="text-xs text-white/45 mt-3">{runMessage}</p>
+          <p className="text-xs text-white/45 mt-3 font-mono break-all">{runMessage}</p>
         )}
+
+        {/* Manual phase triggers */}
+        <div className="mt-5 pt-5 border-t border-subtle">
+          <p className="text-xs text-white/30 mb-3">Handmatig per fase triggeren (als de pipeline vastloopt)</p>
+          <div className="flex flex-wrap gap-2">
+            {(['phase2', 'phase3', 'phase4'] as const).map((phase) => (
+              <button
+                key={phase}
+                onClick={() => triggerPhase(phase)}
+                disabled={phaseLoading !== null}
+                className="px-3 py-1.5 bg-surface-2 border border-subtle text-white/50 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors disabled:opacity-40"
+              >
+                {phaseLoading === phase ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 border border-white/30 border-t-white rounded-full animate-spin" />
+                    {phase}…
+                  </span>
+                ) : (
+                  `▶ ${phase}`
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Leads table */}
