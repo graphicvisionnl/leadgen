@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "pipeline": "npx ts-node --project tsconfig.scripts.json scripts/run-pipeline.ts"
   },
   "dependencies": {
     "next": "14.2.5",
@@ -31,6 +32,9 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5",
-    "@types/nodemailer": "^6.4.14"
+    "@types/nodemailer": "^6.4.14",
+    "ts-node": "^10.9.2",
+    "dotenv": "^16.4.5",
+    "puppeteer": "^22.8.0"
   }
 }
