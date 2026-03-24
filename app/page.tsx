@@ -97,15 +97,15 @@ export default function Dashboard() {
       })
       const data = await res.json()
       if (data.success) {
-        setRunMessage(`Pipeline gestart (run ID: ${data.runId})`)
-        // Stop polling after 10 minutes
-        setTimeout(() => setIsRunning(false), 10 * 60 * 1000)
+        setRunMessage(`Pipeline gestart op Hetzner (run ID: ${data.runId})`)
+        // Stop polling after 20 minutes (Hetzner can take longer)
+        setTimeout(() => setIsRunning(false), 20 * 60 * 1000)
       } else {
-        setRunMessage('Fout bij starten pipeline.')
+        setRunMessage(`Fout: ${data.error ?? 'Onbekende fout'}`)
         setIsRunning(false)
       }
     } catch {
-      setRunMessage('Verbindingsfout.')
+      setRunMessage('Verbindingsfout met pipeline server.')
       setIsRunning(false)
     }
   }
