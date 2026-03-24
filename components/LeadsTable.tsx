@@ -118,6 +118,11 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading }: L
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={lead.status as LeadStatus} />
+                      {lead.qualify_reason && (
+                        <p className="text-xs text-white/30 mt-0.5 max-w-[180px] truncate" title={lead.qualify_reason}>
+                          {lead.qualify_reason}
+                        </p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {lead.preview_url ? (
