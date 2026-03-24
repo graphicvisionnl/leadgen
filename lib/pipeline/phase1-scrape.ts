@@ -25,21 +25,16 @@ export async function runScrapePhase(
   const token = process.env.APIFY_API_TOKEN!
 
   // Start Apify actor run
-  // Actor: compass/google-maps-scraper (well-maintained Google Maps scraper with email extraction)
+  // Actor: nwua9Gu5YrADL7ZDj — Google Maps Email Extractor (lukaskrivka)
   const startRes = await fetch(
-    `https://api.apify.com/v2/acts/compass~google-maps-scraper/runs?token=${token}`,
+    `https://api.apify.com/v2/acts/nwua9Gu5YrADL7ZDj/runs?token=${token}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        searchStringsArray: [`${niche} ${city}`],
-        maxCrawledPlacesPerSearch: maxLeads,
+        searchString: `${niche} ${city}`,
+        maxCrawledPlaces: maxLeads,
         language: 'nl',
-        exportPlaceUrls: false,
-        includeHistogram: false,
-        includeOpeningHours: false,
-        includePeopleAlsoSearch: false,
-        scrapeContacts: true,
       }),
     }
   )
