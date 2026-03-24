@@ -72,7 +72,52 @@ async function screenshotWithFallback(url: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer())
 }
 
-// Process a batch of scraped leads: screenshot → upload → Claude qualify
+// Try to find an email address by scraping the lead's website
+async function scrapeEmailFromWebsite(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) return null
+    const html = await res.text()
+
+    // Look for mailto: links first (most reliable)
+    const mailtoMatch = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
+    if (mailtoMatch) return mailtoMatch[1].toLowerCase()
+
+    // Fallback: regex scan for email patterns
+    const emailMatch = html.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g)
+    if (emailMatch) {
+      // Filter out common non-contact emails
+      const filtered = emailMatch.filter(
+        (e) => !e.includes('sentry') && !e.includes('example') &&
+               !e.includes('noreply') && !e.includes('privacy') &&
+               !e.includes('support@wordpress') && !e.includes('@w3.org')
+      )
+      if (filtered.length > 0) return filtered[0].toLowerCase()
+    }
+
+    // Try /contact page
+    const baseUrl = new URL(url).origin
+    const contactRes = await fetch(`${baseUrl}/contact`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      signal: AbortSignal.timeout(6000),
+    }).catch(() => null)
+
+    if (contactRes?.ok) {
+      const contactHtml = await contactRes.text()
+      const contactMailto = contactHtml.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
+      if (contactMailto) return contactMailto[1].toLowerCase()
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+// Process a batch of scraped leads: email scrape (if needed) → screenshot → Claude qualify
 export async function qualifyBatch(batchSize: number = 3): Promise<{
   processed: number
   qualified: number
@@ -80,13 +125,13 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
 }> {
   const supabase = createServerSupabaseClient()
 
-  // Fetch leads that need qualification (have a website, status = scraped, have email)
+  // Fetch leads that need qualification: status = scraped OR no_email
+  // For no_email leads we first try to find an email from their website
   const { data: leads } = await supabase
     .from('leads')
     .select('*')
-    .eq('status', 'scraped')
+    .in('status', ['scraped', 'no_email'])
     .not('website_url', 'is', null)
-    .not('email', 'is', null)
     .limit(batchSize)
 
   if (!leads?.length) return { processed: 0, qualified: 0, disqualified: 0 }
@@ -98,6 +143,22 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
     console.log(`[Phase 2] Processing lead: ${lead.company_name} (${lead.website_url})`)
 
     try {
+      // For no_email leads: try to scrape an email from their website first
+      let email = lead.email
+      if (!email) {
+        console.log(`[Phase 2] Trying to find email for ${lead.company_name}…`)
+        email = await scrapeEmailFromWebsite(lead.website_url!)
+        if (email) {
+          console.log(`[Phase 2] Found email: ${email}`)
+          await supabase.from('leads').update({ email }).eq('id', lead.id)
+        } else {
+          console.log(`[Phase 2] No email found for ${lead.company_name}, skipping`)
+          await supabase.from('leads').update({ status: 'disqualified', qualify_reason: 'Geen e-mailadres gevonden' }).eq('id', lead.id)
+          disqualified++
+          continue
+        }
+      }
+
       // Add small delay between screenshots to avoid being blocked
       await new Promise((r) => setTimeout(r, 2000))
 

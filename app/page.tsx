@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [runMessage, setRunMessage] = useState('')
   const [niche, setNiche] = useState('')
   const [city, setCity] = useState('')
+  const [maxLeads, setMaxLeads] = useState(30)
 
   const fetchLeads = useCallback(async () => {
     const params = new URLSearchParams()
@@ -41,6 +42,7 @@ export default function Dashboard() {
     const data = await res.json()
     if (data.default_niche) setNiche(data.default_niche)
     if (data.default_city) setCity(data.default_city)
+    if (data.max_leads) setMaxLeads(parseInt(data.max_leads))
   }, [])
 
   useEffect(() => {
@@ -70,7 +72,7 @@ export default function Dashboard() {
       const res = await fetch('/api/pipeline/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ niche, city }),
+        body: JSON.stringify({ niche, city, maxLeads }),
       })
       const data = await res.json()
       if (data.success) {

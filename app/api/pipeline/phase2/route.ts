@@ -33,8 +33,7 @@ export async function POST(request: NextRequest) {
     const { count } = await supabase
       .from('leads')
       .select('*', { count: 'exact', head: true })
-      .eq('status', 'scraped')
-      .not('email', 'is', null)
+      .in('status', ['scraped', 'no_email'])
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL!
 
