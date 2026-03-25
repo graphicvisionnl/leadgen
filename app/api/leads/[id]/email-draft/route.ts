@@ -36,3 +36,13 @@ export async function GET(
 
   return NextResponse.json(draft)
 }
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const supabase = createServerSupabaseClient()
+  const { subject, body } = await request.json()
+  await supabase.from('leads').update({ email_subject: subject, email_body: body }).eq('id', params.id)
+  return NextResponse.json({ ok: true })
+}

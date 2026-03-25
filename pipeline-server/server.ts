@@ -1,7 +1,6 @@
 import 'dotenv/config'
 import express from 'express'
 import { createClient } from '@supabase/supabase-js'
-import Anthropic from '@anthropic-ai/sdk'
 import puppeteer from 'puppeteer'
 import nodemailer from 'nodemailer'
 import * as fs from 'fs'
@@ -25,7 +24,33 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+// ─── kie.ai Claude helper ─────────────────────────────────────────────────────
+async function callClaude(params: {
+  model: string
+  system?: string
+  messages: any[]
+  max_tokens: number
+  extendedOutput?: boolean
+}): Promise<{ content: any[]; stop_reason: string; usage: any }> {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${process.env.KIE_API_KEY}`,
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+  }
+  if (params.extendedOutput) headers['anthropic-beta'] = 'output-128k-2025-02-19'
+
+  const body: any = { model: params.model, max_tokens: params.max_tokens, messages: params.messages, stream: false }
+  if (params.system) body.system = params.system
+
+  const res = await fetch('https://api.kie.ai/claude/v1/messages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
+  return res.json()
+}
 
 // ─── Log buffer ───────────────────────────────────────────────────────────────
 const logBuffer: string[] = []
@@ -211,7 +236,7 @@ Kwalificeer ALLEEN als score >= 7. Bij twijfel: disqualificeer.
 
 Antwoord ALLEEN in JSON (geen markdown): {"qualified":true,"score":8,"reason":"Korte uitleg in het Nederlands waarom wel/niet"}` })
 
-        const response = await claude.messages.create({
+        const response = await callClaude({
           model: 'claude-sonnet-4-6', max_tokens: 400,
           messages: [{ role: 'user', content: msgContent }],
         })
@@ -335,11 +360,12 @@ OUTPUT QUALITY:
 - Reviews: write realistic, detailed Dutch reviews (3-4 sentences each), not just "Goede service!"
 - The total HTML output should be 700+ lines — a full, long-form landing page`
 
-      const htmlModel = process.env.HTML_MODEL ?? 'claude-haiku-4-5-20251001'
-      const response = await (claude.messages.create as Function)(
-        { model: htmlModel, max_tokens: 32000, system, messages: [{ role: 'user', content: prompt }] },
-        { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } }
-      )
+      const htmlModel = process.env.HTML_MODEL ?? 'claude-sonnet-4-6'
+      const response = await callClaude({
+        model: htmlModel, max_tokens: 32000, system,
+        messages: [{ role: 'user', content: prompt }],
+        extendedOutput: true,
+      })
 
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
       log('Phase 3', `Stop reason: ${response.stop_reason}, tokens: ${response.usage?.output_tokens}`)
@@ -534,13 +560,17 @@ Eisen voor de e-mail:
 
 Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
 
-    const response = await claude.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+    const response = await callClaude({
+      model: 'claude-sonnet-4-6',
       max_tokens: 700,
       messages: [{ role: 'user', content: prompt }],
     })
 
     const body = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+
+    // Persist draft to Supabase
+    await supabase.from('leads').update({ email_subject: subject, email_body: body }).eq('id', id)
+
     res.json({ subject, body })
   } catch (e) {
     log('Mail', `Genereren mislukt: ${e}`)

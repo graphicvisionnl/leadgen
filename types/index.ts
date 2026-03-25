@@ -24,6 +24,8 @@ export interface Lead {
   preview_screenshot_url: string | null
   gmail_draft_id: string | null
   pipeline_run_id: string | null
+  email_subject: string | null
+  email_body: string | null
   created_at: string
   updated_at: string
 }

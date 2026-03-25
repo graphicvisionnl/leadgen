@@ -14,16 +14,24 @@ export function LeadDetail({ lead }: LeadDetailProps) {
   const [sent, setSent] = useState(lead.status === 'sent')
   const [sendError, setSendError] = useState('')
 
-  // Email compose state
+  // Email compose state — pre-fill from saved Supabase draft
   const [emailTo, setEmailTo] = useState(lead.email ?? '')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
+  const [subject, setSubject] = useState(lead.email_subject ?? '')
+  const [body, setBody] = useState(lead.email_body ?? '')
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState('')
   const [showPreview, setShowPreview] = useState(false)
 
   const canCompose = !!lead.preview_url && !sent
   const draftReady = subject !== '' && body !== ''
+
+  async function saveDraft(newSubject: string, newBody: string) {
+    await fetch(`/api/leads/${lead.id}/email-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: newSubject, body: newBody }),
+    }).catch(() => {})
+  }
 
   async function generateDraft() {
     setGenerating(true)
@@ -276,6 +284,7 @@ export function LeadDetail({ lead }: LeadDetailProps) {
                   type="text"
                   value={subject}
                   onChange={e => setSubject(e.target.value)}
+                  onBlur={e => saveDraft(e.target.value, body)}
                   className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
                 />
               </div>
@@ -284,6 +293,7 @@ export function LeadDetail({ lead }: LeadDetailProps) {
                 <textarea
                   value={body}
                   onChange={e => setBody(e.target.value)}
+                  onBlur={e => saveDraft(subject, e.target.value)}
                   rows={12}
                   className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 font-mono resize-y"
                 />
