@@ -183,10 +183,36 @@ async function phase2(runId: string) {
         if (screenshotBase64) {
           msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 } })
         }
-        msgContent.push({ type: 'text', text: `Bedrijf: ${lead.company_name} (${lead.niche})\nBeoordeel of deze website een redesign nodig heeft.\nAntwoord ALLEEN in JSON: {"qualified":true,"score":8,"reason":"..."}` })
+        msgContent.push({ type: 'text', text: `Bedrijf: ${lead.company_name} (${lead.niche})\nWebsite: ${lead.website_url}
+
+Beoordeel deze website STRENG als potentiële klant voor een webdesign bureau. Wees kritisch — kwalificeer ALLEEN als de website meerdere serieuze problemen heeft die een redesign zinvol maken.
+
+DISQUALIFICEER (score 1-5) als de website:
+- Al een modern, professioneel ontwerp heeft (na 2019)
+- Duidelijke call-to-actions heeft (telefoon, formulier, knop boven de vouw)
+- Goede navigatie en overzichtelijke structuur heeft
+- Beoordelingen, reviews of social proof toont
+- Een contactformulier of offerte aanvraag heeft
+- Duidelijke branding en consistent design heeft
+- Inhoudelijk compleet is (diensten, over ons, contact goed beschreven)
+
+KWALIFICEER (score 6-10) ALLEEN als de website meerdere van deze problemen heeft:
+- Verouderd of amateuristisch design (pre-2018 uitstraling, slechte fonts, lelijke kleuren)
+- Geen duidelijke call-to-action boven de vouw
+- Slechte of verwarrende navigatie
+- Geen reviews of vertrouwenssignalen zichtbaar
+- Rommelige of lege layout
+- Geen contactformulier of moeilijk te vinden
+- Generiek WordPress-template zonder eigen uitstraling
+- Nauwelijks inhoud of beschrijving van diensten
+
+Score 1-10 waarbij 10 = volledig onbruikbare website.
+Kwalificeer ALLEEN als score >= 7. Bij twijfel: disqualificeer.
+
+Antwoord ALLEEN in JSON (geen markdown): {"qualified":true,"score":8,"reason":"Korte uitleg in het Nederlands waarom wel/niet"}` })
 
         const response = await claude.messages.create({
-          model: 'claude-sonnet-4-6', max_tokens: 300,
+          model: 'claude-sonnet-4-6', max_tokens: 400,
           messages: [{ role: 'user', content: msgContent }],
         })
         const text = response.content[0].type === 'text' ? response.content[0].text : ''
@@ -477,22 +503,109 @@ app.post('/send-email/:id', async (req, res) => {
       auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
     })
 
-    // Convert plain text to HTML
     const previewUrl: string = lead.preview_url
     const plainText: string = body ?? ''
-    const lines = plainText.split('\n').map((line: string) =>
-      line.includes(previewUrl)
-        ? line.replace(previewUrl, `<a href="${previewUrl}" style="color:#FF794F;font-weight:bold;">${previewUrl}</a>`)
-        : line
-    )
-    const html = '<p style="font-family:sans-serif;font-size:14px;line-height:1.6">' +
-      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.6">') +
-      '</p>'
 
-    const defaultSignature = settings.email_signature ?? 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl'
     const firstName = lead.email.split('@')[0].split(/[._-]/)[0]
     const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
     const defaultSubject = `Ik heb iets voor je gebouwd, ${name}`
+
+    // Convert plain text body paragraphs to HTML rows for the email
+    const bodyParagraphs = plainText
+      .split('\n\n')
+      .filter(p => p.trim())
+      .map(para => {
+        const escaped = para
+          .split('\n')
+          .map((line: string) => line
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          )
+          .join('<br>')
+        return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
+      })
+      .join('')
+
+    // CTA button replaces the preview URL line
+    const ctaHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px">
+        <tr>
+          <td>
+            <a href="${previewUrl}" target="_blank"
+               style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 28px;border-radius:8px;letter-spacing:0.3px">
+              Bekijk jouw nieuwe website →
+            </a>
+          </td>
+        </tr>
+      </table>`
+
+    // Strip the raw URL line from body paragraphs and inject CTA after second paragraph
+    const cleanBody = bodyParagraphs.replace(
+      new RegExp(`<p[^>]*>.*?${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*?</p>`, 's'),
+      ctaHtml
+    )
+
+    const html = `<!DOCTYPE html>
+<html lang="nl">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f4f4f4;padding:32px 0">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:#0f0f0f;padding:28px 40px;text-align:left">
+              <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-wit.png"
+                   alt="Graphic Vision" width="160" style="display:block;height:auto;max-height:40px;object-fit:contain">
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 32px">
+              ${cleanBody}
+            </td>
+          </tr>
+
+          <!-- Divider -->
+          <tr>
+            <td style="padding:0 40px">
+              <hr style="border:none;border-top:1px solid #e8e8e8;margin:0">
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 40px 32px;background:#fafafa">
+              <table cellpadding="0" cellspacing="0" role="presentation">
+                <tr>
+                  <td style="padding-right:16px;vertical-align:middle">
+                    <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-zwart.png"
+                         alt="Graphic Vision" width="100" style="display:block;height:auto;object-fit:contain;opacity:0.7">
+                  </td>
+                  <td style="border-left:2px solid #e8e8e8;padding-left:16px;vertical-align:middle">
+                    <p style="margin:0;font-size:13px;color:#888;line-height:1.6">
+                      Ezra — Graphic Vision<br>
+                      <a href="https://graphicvision.nl" style="color:#FF794F;text-decoration:none">graphicvision.nl</a>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+
+        <!-- Unsubscribe note -->
+        <p style="margin:16px 0 0;font-size:11px;color:#aaa;text-align:center">
+          Je ontvangt deze e-mail omdat wij denken dat we je kunnen helpen.
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
 
     await transport.sendMail({
       from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
