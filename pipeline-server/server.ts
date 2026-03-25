@@ -213,26 +213,89 @@ async function phase2(runId: string) {
 }
 
 // ─── Phase 3: HTML redesign ───────────────────────────────────────────────────
+async function fetchWebsiteText(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!res.ok) return ''
+    const html = await res.text()
+    return html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 5000)
+  } catch { return '' }
+}
+
 async function phase3(runId: string) {
   log('Phase 3', 'HTML redesigns genereren')
   const { data: leads } = await supabase.from('leads').select('*').eq('status', 'qualified')
   if (!leads?.length) { log('Phase 3', 'Geen gekwalificeerde leads'); return }
 
-  const system = `You are a senior UI/UX engineer at a premium design agency.\n\n${loadSkill('taste-skill.md')}\n\n${loadSkill('redesign-skill.md')}`
+  const system = `You are a senior web designer at a premium Dutch design agency. You build beautiful, complete, conversion-focused websites for local businesses.
+
+${loadSkill('taste-skill.md')}
+
+${loadSkill('redesign-skill.md')}`
 
   for (const lead of leads) {
     log('Phase 3', `Genereren: ${lead.company_name}`)
     try {
+      const websiteText = await fetchWebsiteText(lead.website_url)
+      log('Phase 3', `Website content: ${websiteText.length} chars`)
+
+      const prompt = `Create a complete, professional single-page website redesign. Return ONLY valid HTML starting with <!DOCTYPE html>.
+
+ORIGINAL WEBSITE CONTENT (extract phone, address, email, services, company info):
+${websiteText || 'Not available'}
+
+BUSINESS:
+- Name: ${lead.company_name}
+- Industry: ${lead.niche}
+- City: ${lead.city}${lead.google_rating ? `\n- Google Rating: ${lead.google_rating}/5 (${lead.review_count ?? 0} reviews)` : ''}${lead.email ? `\n- Email: ${lead.email}` : ''}
+- Website: ${lead.website_url}
+
+DESIGN:
+- White background (#FFFFFF), clean and modern
+- Google Font: Inter (via @import in <style>)
+- Primary accent: a bold, industry-appropriate color (e.g. for plumber: #E8580A orange or #1B4FD8 blue — pick one that fits)
+- Real Unsplash photos — use: https://images.unsplash.com/photo-{ID}?auto=format&fit=crop&w=1200&q=80
+  Pick relevant photo IDs for "${lead.niche}" (e.g. for plumber: 1621905251189-08b45d6a269e, 1558618666-fcd25c85cd64)
+- All CSS in <style> tag only
+- Fully self-contained, no external dependencies except Google Fonts + Unsplash images
+
+REQUIRED SECTIONS:
+1. STICKY HEADER — logo text left, nav links center, phone CTA button right (use real phone from original site)
+2. HERO — split layout or full-width image, bold headline, subtext, two CTAs: "Bel Nu" (phone) + "Offerte Aanvragen"
+3. SERVICES — 3–4 service cards with SVG icon, title, 1-line description (specific to their industry)
+4. TRUST — 3 columns: Google rating stars, response time / availability, years experience
+5. ABOUT — 2-column: left text (company story, 2–3 sentences based on original content), right Unsplash image
+6. CONTACT — left column: address, phone, email from original site. Right column: simple HTML form (name, email, message, submit)
+7. FOOTER — company name, address, phone, © 2025
+
+RULES:
+- Write all copy in Dutch
+- Extract and use the REAL phone number from the original content above — if not found, write "Bel ons"
+- Extract and use the REAL address/city
+- NO lorem ipsum, NO placeholder text
+- Show Google rating (${lead.google_rating ?? 'N/A'} ⭐) as a trust badge in the hero or trust section
+- Fixed badge bottom-right: small pill "Concept door Graphic Vision" in the accent color
+- Complete the entire page — do not cut off`
+
       const response = await claude.messages.create({
-        model: 'claude-sonnet-4-6', max_tokens: 8096, system,
-        messages: [{
-          role: 'user',
-          content: `Genereer een premium single-file website redesign voor:\n\nBedrijfsnaam: ${lead.company_name}\nBranche: ${lead.niche}\nStad: ${lead.city}\nHuidige site: ${lead.website_url}${lead.google_rating ? `\nGoogle rating: ${lead.google_rating} sterren (${lead.review_count ?? 0} reviews)` : ''}\n\nVolledig zelfstandig HTML, alle CSS inline. Floating badge rechtsonder: "Concept: Graphic Vision". Secties: Hero, Diensten, Over ons, Contact.\n\nReturn ALLEEN HTML startend met <!DOCTYPE html>.`,
-        }],
+        model: 'claude-sonnet-4-6',
+        max_tokens: 8000,
+        system,
+        messages: [{ role: 'user', content: prompt }],
       })
+
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
       const html = text.substring(text.indexOf('<!DOCTYPE html>'))
-      if (!html.startsWith('<!DOCTYPE')) throw new Error('Geen geldige HTML')
+      if (!html.startsWith('<!DOCTYPE')) throw new Error('Geen geldige HTML ontvangen')
 
       const fn = `${lead.id}-preview.html`
       await supabase.storage.from('previews').upload(fn, Buffer.from(html, 'utf-8'), { contentType: 'text/html', upsert: true })
