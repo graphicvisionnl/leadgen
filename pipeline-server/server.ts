@@ -324,7 +324,16 @@ RULES:
 - NO lorem ipsum
 - Google rating ${lead.google_rating ?? 'N/A'} ⭐ prominently in hero and trust stats
 - Keep CSS efficient — reuse classes, no redundant rules
-- Complete the ENTIRE page — every section, closing </body></html>`
+- Complete the ENTIRE page — every section, closing </body></html>
+
+OUTPUT QUALITY:
+- Write every section with FULL, detailed content — no placeholders, no shortened versions
+- Each section must feel complete and real, as if a copywriter wrote it
+- Services section: write 2-3 real sentences per card, not just a title
+- FAQ: write complete question + full answer paragraph (3-5 sentences each)
+- About section: write a proper 3-4 sentence company story paragraph
+- Reviews: write realistic, detailed Dutch reviews (3-4 sentences each), not just "Goede service!"
+- The total HTML output should be 700+ lines — a full, long-form landing page`
 
       const htmlModel = process.env.HTML_MODEL ?? 'claude-haiku-4-5-20251001'
       const response = await (claude.messages.create as Function)(
