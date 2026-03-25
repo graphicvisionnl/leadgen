@@ -454,6 +454,63 @@ app.post('/run', async (req, res) => {
   })()
 })
 
+// ─── Send email ───────────────────────────────────────────────────────────────
+app.post('/send-email/:id', async (req, res) => {
+  const { id } = req.params
+  const { subject, body } = req.body
+
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+  if (!lead.email) return res.status(400).json({ error: 'Lead heeft geen e-mailadres' })
+  if (!lead.preview_url) return res.status(400).json({ error: 'Nog geen preview URL' })
+
+  const { data: settingsRows } = await supabase.from('settings').select('*')
+  const settings = Object.fromEntries(
+    (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
+  )
+
+  try {
+    const transport = nodemailer.createTransport({
+      host: process.env.SMTP_HOST!,
+      port: parseInt(process.env.SMTP_PORT ?? '465'),
+      secure: process.env.SMTP_PORT !== '587',
+      auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+    })
+
+    // Convert plain text to HTML
+    const previewUrl: string = lead.preview_url
+    const plainText: string = body ?? ''
+    const lines = plainText.split('\n').map((line: string) =>
+      line.includes(previewUrl)
+        ? line.replace(previewUrl, `<a href="${previewUrl}" style="color:#FF794F;font-weight:bold;">${previewUrl}</a>`)
+        : line
+    )
+    const html = '<p style="font-family:sans-serif;font-size:14px;line-height:1.6">' +
+      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.6">') +
+      '</p>'
+
+    const defaultSignature = settings.email_signature ?? 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl'
+    const firstName = lead.email.split('@')[0].split(/[._-]/)[0]
+    const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
+    const defaultSubject = `Ik heb iets voor je gebouwd, ${name}`
+
+    await transport.sendMail({
+      from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
+      to: lead.email,
+      subject: subject ?? defaultSubject,
+      html,
+      text: plainText,
+    })
+
+    await supabase.from('leads').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
+    log('Mail', `Verzonden naar ${lead.email}`)
+    res.json({ success: true })
+  } catch (e) {
+    log('Mail', `Fout bij versturen naar ${lead.email}: ${e}`)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
 app.get('/status/:runId', async (req, res) => {
   const { data } = await supabase.from('pipeline_runs').select('*').eq('id', req.params.runId).single()
   res.json(data)

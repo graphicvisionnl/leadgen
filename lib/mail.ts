@@ -2,17 +2,16 @@ import nodemailer from 'nodemailer'
 
 function createTransport() {
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST!,       // bijv. smtp.hostinger.com
+    host: process.env.SMTP_HOST!,
     port: parseInt(process.env.SMTP_PORT ?? '465'),
-    secure: process.env.SMTP_PORT === '465', // true voor 465 (SSL), false voor 587 (STARTTLS)
+    secure: process.env.SMTP_PORT !== '587',
     auth: {
-      user: process.env.SMTP_USER!,     // bijv. ezra@graphicvision.nl
+      user: process.env.SMTP_USER!,
       pass: process.env.SMTP_PASS!,
     },
   })
 }
 
-// Extract a first name from an email address or company name
 function extractFirstName(email: string, companyName: string): string {
   const prefix = email.split('@')[0]
   const namePart = prefix.split(/[._-]/)[0]
@@ -22,38 +21,80 @@ function extractFirstName(email: string, companyName: string): string {
   return companyName.split(' ')[0]
 }
 
-interface SendMailParams {
+interface DraftParams {
   to: string
   companyName: string
-  niche: string
   previewUrl: string
   signature?: string
 }
 
-export async function sendPreviewMail(params: SendMailParams): Promise<void> {
-  const transport = createTransport()
+export function buildEmailDraft(params: DraftParams): { subject: string; plainText: string } {
   const firstName = extractFirstName(params.to, params.companyName)
   const signature = params.signature ?? 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl'
 
   const subject = `Ik heb iets voor je gebouwd, ${firstName}`
+  const plainText = [
+    `Hey ${firstName},`,
+    '',
+    `Ik ben Ezra van Graphic Vision. Ik zag je website en dacht: dit verdient beter.`,
+    '',
+    `Ik heb in een paar minuten een concept gebouwd van hoe jouw nieuwe site eruit zou kunnen zien:`,
+    '',
+    `→ ${params.previewUrl}`,
+    '',
+    `Geen verplichtingen. Ik ben benieuwd wat je ervan vindt.`,
+    '',
+    signature,
+  ].join('\n')
 
-  const html = `<p>Hey ${firstName},</p>
+  return { subject, plainText }
+}
 
-<p>Ik ben Ezra van Graphic Vision. Ik zag je website en dacht: dit verdient beter.</p>
+function plainTextToHtml(text: string, previewUrl: string): string {
+  const lines = text.split('\n')
+  const htmlLines = lines.map(line => {
+    // Make the preview URL a clickable styled link
+    if (line.includes(previewUrl)) {
+      return line.replace(
+        previewUrl,
+        `<a href="${previewUrl}" style="color: #FF794F; font-weight: bold;">${previewUrl}</a>`
+      )
+    }
+    return line
+  })
+  // Wrap paragraphs (double newlines become </p><p>)
+  return '<p>' + htmlLines.join('<br>').replace(/<br><br>/g, '</p><p>') + '</p>'
+}
 
-<p>Ik heb in een paar minuten een concept gebouwd van hoe jouw nieuwe site eruit zou kunnen zien:</p>
+interface SendMailParams {
+  to: string
+  companyName: string
+  previewUrl: string
+  signature?: string
+  subjectOverride?: string
+  bodyOverride?: string
+}
 
-<p><strong><a href="${params.previewUrl}" style="color: #FF794F;">→ Bekijk het concept hier</a></strong></p>
+export async function sendPreviewMail(params: SendMailParams): Promise<void> {
+  const transport = createTransport()
 
-<p>Geen verplichtingen. Ik ben benieuwd wat je ervan vindt.</p>
+  const draft = buildEmailDraft({
+    to: params.to,
+    companyName: params.companyName,
+    previewUrl: params.previewUrl,
+    signature: params.signature,
+  })
 
-<p>${signature.replace(/\n/g, '<br>')}</p>`
+  const subject = params.subjectOverride ?? draft.subject
+  const plainText = params.bodyOverride ?? draft.plainText
+  const html = plainTextToHtml(plainText, params.previewUrl)
 
   await transport.sendMail({
     from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
     to: params.to,
     subject,
     html,
+    text: plainText,
   })
 
   console.log(`[Mail] Verzonden naar ${params.to}`)

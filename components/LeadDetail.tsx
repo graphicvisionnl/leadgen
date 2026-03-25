@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Lead, LeadStatus } from '@/types'
 import { StatusBadge } from './StatusBadge'
 
@@ -14,11 +14,35 @@ export function LeadDetail({ lead }: LeadDetailProps) {
   const [sent, setSent] = useState(lead.status === 'sent')
   const [sendError, setSendError] = useState('')
 
+  // Email compose state
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [draftLoaded, setDraftLoaded] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
+
+  const canCompose = !!lead.email && !!lead.preview_url && !sent
+
+  useEffect(() => {
+    if (!canCompose) return
+    fetch(`/api/leads/${lead.id}/email-draft`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.subject) setSubject(data.subject)
+        if (data.plainText) setBody(data.plainText)
+        setDraftLoaded(true)
+      })
+      .catch(() => setDraftLoaded(true))
+  }, [lead.id, canCompose])
+
   async function handleSendMail() {
     setSending(true)
     setSendError('')
     try {
-      const res = await fetch(`/api/leads/${lead.id}/send-email`, { method: 'POST' })
+      const res = await fetch(`/api/leads/${lead.id}/send-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, body }),
+      })
       const data = await res.json()
       if (res.ok) {
         setSent(true)
@@ -28,6 +52,22 @@ export function LeadDetail({ lead }: LeadDetailProps) {
     } finally {
       setSending(false)
     }
+  }
+
+  // Convert plain text to preview HTML (same logic as server)
+  function toPreviewHtml(text: string): string {
+    const lines = text.split('\n').map(line => {
+      if (lead.preview_url && line.includes(lead.preview_url)) {
+        return line.replace(
+          lead.preview_url,
+          `<a href="${lead.preview_url}" style="color:#FF794F;font-weight:bold;">${lead.preview_url}</a>`
+        )
+      }
+      return line
+    })
+    return '<p style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">' +
+      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">') +
+      '</p>'
   }
 
   return (
@@ -91,7 +131,6 @@ export function LeadDetail({ lead }: LeadDetailProps) {
 
       {/* Screenshots side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Original screenshot */}
         <div>
           <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Originele website</p>
           <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
@@ -110,11 +149,8 @@ export function LeadDetail({ lead }: LeadDetailProps) {
           </div>
         </div>
 
-        {/* Preview screenshot */}
         <div>
-          <p className="text-white/40 text-xs uppercase tracking-wider mb-3">
-            Gegenereerde preview
-          </p>
+          <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Gegenereerde preview</p>
           <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
             {lead.preview_screenshot_url ? (
               <Image
@@ -139,45 +175,107 @@ export function LeadDetail({ lead }: LeadDetailProps) {
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-3">
-        {lead.preview_url && (
+      {/* Preview link */}
+      {lead.preview_url && (
+        <div>
           <a
             href={lead.preview_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors"
           >
             Bekijk preview →
           </a>
-        )}
-        {lead.status === 'deployed' && !sent && (
-          <button
-            onClick={handleSendMail}
-            disabled={sending}
-            className="px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            {sending ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Versturen…
-              </>
-            ) : (
-              'Verstuur mail →'
+        </div>
+      )}
+
+      {/* Email compose */}
+      {sent ? (
+        <div className="bg-surface rounded-xl border border-green-500/20 p-5">
+          <p className="text-white/40 text-xs uppercase tracking-wider mb-1">E-mail</p>
+          <p className="text-green-400 text-sm font-medium">✓ Mail verzonden naar {lead.email}</p>
+        </div>
+      ) : canCompose ? (
+        <div className="bg-surface rounded-xl border border-subtle p-6 space-y-5">
+          <div className="flex items-center justify-between">
+            <p className="text-white/40 text-xs uppercase tracking-wider">E-mail concept</p>
+            <button
+              onClick={() => setShowPreview(p => !p)}
+              className="text-xs text-white/40 hover:text-white/70 transition-colors"
+            >
+              {showPreview ? 'Bewerken' : 'Voorbeeld →'}
+            </button>
+          </div>
+
+          {!draftLoaded ? (
+            <p className="text-white/30 text-sm">Concept laden…</p>
+          ) : showPreview ? (
+            /* Rendered email preview */
+            <div className="bg-white rounded-lg p-6 border border-white/10">
+              <div className="mb-4 pb-4 border-b border-gray-200 space-y-1">
+                <p className="text-xs text-gray-400">Aan: <span className="text-gray-700">{lead.email}</span></p>
+                <p className="text-xs text-gray-400">Onderwerp: <span className="text-gray-700 font-medium">{subject}</span></p>
+              </div>
+              <div
+                dangerouslySetInnerHTML={{ __html: toPreviewHtml(body) }}
+              />
+            </div>
+          ) : (
+            /* Edit mode */
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-white/40 mb-1.5">Aan</label>
+                <p className="text-sm text-white/60 bg-surface-2 border border-subtle rounded-lg px-3 py-2">
+                  {lead.email}
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-white/40 mb-1.5">Bericht</label>
+                <textarea
+                  value={body}
+                  onChange={e => setBody(e.target.value)}
+                  rows={10}
+                  className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 font-mono resize-y"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleSendMail}
+              disabled={sending || !subject || !body}
+              className="px-5 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {sending ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Versturen…
+                </>
+              ) : (
+                'Verstuur mail →'
+              )}
+            </button>
+            {sendError && (
+              <span className="text-red-400 text-sm">{sendError}</span>
             )}
-          </button>
-        )}
-        {sent && (
-          <span className="px-4 py-2 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg text-sm font-medium">
-            ✓ Mail verzonden
-          </span>
-        )}
-        {sendError && (
-          <span className="px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
-            Fout: {sendError}
-          </span>
-        )}
-      </div>
+          </div>
+        </div>
+      ) : !lead.email ? (
+        <div className="bg-surface rounded-xl border border-subtle p-5">
+          <p className="text-white/40 text-xs uppercase tracking-wider mb-1">E-mail</p>
+          <p className="text-white/40 text-sm">Geen e-mailadres gevonden voor deze lead.</p>
+        </div>
+      ) : null}
     </div>
   )
 }
