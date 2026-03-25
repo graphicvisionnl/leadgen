@@ -715,6 +715,7 @@ app.post('/send-email/:id', async (req, res) => {
     await transport.sendMail({
       from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
       to: recipientEmail,
+      bcc: 'graphicvisionnl@gmail.com',
       subject: subject ?? defaultSubject,
       html,
       text: plainText,
