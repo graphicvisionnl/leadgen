@@ -2,6 +2,7 @@
 
 import Image from 'next/image'
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Lead, LeadStatus } from '@/types'
 import { StatusBadge } from './StatusBadge'
 
@@ -10,8 +11,10 @@ interface LeadDetailProps {
 }
 
 export function LeadDetail({ lead }: LeadDetailProps) {
+  const router = useRouter()
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(lead.status === 'sent')
+  const [deleting, setDeleting] = useState(false)
   const [sendError, setSendError] = useState('')
 
   // Email compose state — pre-fill from saved Supabase draft
@@ -31,6 +34,13 @@ export function LeadDetail({ lead }: LeadDetailProps) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: newSubject, body: newBody }),
     }).catch(() => {})
+  }
+
+  async function handleDelete() {
+    if (!confirm(`"${lead.company_name}" verwijderen? Dit kan niet ongedaan worden gemaakt.`)) return
+    setDeleting(true)
+    await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
+    router.push('/')
   }
 
   async function generateDraft() {
@@ -110,7 +120,16 @@ export function LeadDetail({ lead }: LeadDetailProps) {
             )}
           </div>
         </div>
-        <StatusBadge status={lead.status as LeadStatus} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={lead.status as LeadStatus} />
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="px-3 py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded-lg text-xs transition-colors disabled:opacity-50"
+          >
+            {deleting ? 'Verwijderen…' : 'Verwijder'}
+          </button>
+        </div>
       </div>
 
       {/* Info grid */}

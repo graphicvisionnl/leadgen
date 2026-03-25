@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { nl } from 'date-fns/locale'
 import { Lead, LeadStatus } from '@/types'
@@ -20,13 +21,30 @@ interface LeadsTableProps {
   statusFilter: string
   onFilterChange: (status: string) => void
   isLoading: boolean
+  onRefresh: () => void
 }
 
-export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading }: LeadsTableProps) {
+export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onRefresh }: LeadsTableProps) {
+  const [deletingAll, setDeletingAll] = useState(false)
+
+  async function deleteAllDisqualified() {
+    if (!confirm('Alle afgewezen leads verwijderen? Dit kan niet ongedaan worden gemaakt.')) return
+    setDeletingAll(true)
+    const res = await fetch('/api/leads/delete-disqualified', { method: 'DELETE' })
+    const data = await res.json()
+    setDeletingAll(false)
+    if (res.ok) {
+      onFilterChange('all')
+      onRefresh()
+    } else {
+      alert(data.error ?? 'Verwijderen mislukt')
+    }
+  }
+
   return (
     <div>
       {/* Filter tabs */}
-      <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
+      <div className="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
         {STATUS_FILTERS.map((f) => (
           <button
             key={f.value}
@@ -40,6 +58,13 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading }: L
             {f.label}
           </button>
         ))}
+        <button
+          onClick={deleteAllDisqualified}
+          disabled={deletingAll}
+          className="ml-auto px-3 py-1.5 rounded-lg text-xs whitespace-nowrap text-red-400/70 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+        >
+          {deletingAll ? 'Verwijderen…' : 'Verwijder afgewezen'}
+        </button>
       </div>
 
       {/* Table */}

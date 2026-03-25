@@ -261,6 +261,7 @@ export default function Dashboard() {
           statusFilter={statusFilter}
           onFilterChange={s => { setStatusFilter(s); setIsLoading(true); fetchLeads().finally(() => setIsLoading(false)) }}
           isLoading={isLoading}
+          onRefresh={() => { fetchLeads(); fetchStats() }}
         />
       </div>
     </div>
