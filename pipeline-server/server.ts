@@ -301,11 +301,12 @@ RULES:
 - Complete the ENTIRE page — every section, closing </body></html>`
 
       const response = await (claude.messages.create as Function)(
-        { model: 'claude-sonnet-4-6', max_tokens: 16000, system, messages: [{ role: 'user', content: prompt }] },
+        { model: 'claude-sonnet-4-6', max_tokens: 32000, system, messages: [{ role: 'user', content: prompt }] },
         { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } }
       )
 
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
+      log('Phase 3', `Stop reason: ${response.stop_reason}, tokens: ${response.usage?.output_tokens}`)
       const html = text.substring(text.indexOf('<!DOCTYPE html>'))
       if (!html.startsWith('<!DOCTYPE')) throw new Error('Geen geldige HTML ontvangen')
 
