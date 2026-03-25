@@ -15,6 +15,7 @@ export function createServerSupabaseClient() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       auth: { persistSession: false },
+      global: { fetch: (url, opts) => fetch(url, { ...opts, cache: 'no-store' }) },
     }
   )
 }
