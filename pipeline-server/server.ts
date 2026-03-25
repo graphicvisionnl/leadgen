@@ -625,7 +625,7 @@ app.post('/send-email/:id', async (req, res) => {
           <!-- Header -->
           <tr>
             <td style="background:#0f0f0f;padding:28px 40px;text-align:left">
-              <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-wit.png"
+              <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png"
                    alt="Graphic Vision" width="160" style="display:block;height:auto;max-height:40px;object-fit:contain">
             </td>
           </tr>
@@ -650,7 +650,7 @@ app.post('/send-email/:id', async (req, res) => {
               <table cellpadding="0" cellspacing="0" role="presentation">
                 <tr>
                   <td style="padding-right:16px;vertical-align:middle">
-                    <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-zwart.png"
+                    <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png"
                          alt="Graphic Vision" width="100" style="display:block;height:auto;object-fit:contain;opacity:0.7">
                   </td>
                   <td style="border-left:2px solid #e8e8e8;padding-left:16px;vertical-align:middle">
