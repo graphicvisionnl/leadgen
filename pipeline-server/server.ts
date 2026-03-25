@@ -258,7 +258,16 @@ async function deployToVercel(name: string, html: string): Promise<string> {
     body: JSON.stringify({ name: `preview-${slug}-${Date.now().toString(36)}`, files: [{ file: 'index.html', data: html, encoding: 'utf-8' }], projectSettings: { framework: null }, target: 'production' }),
   })
   if (!res.ok) throw new Error(`Vercel deploy mislukt: ${await res.text()}`)
-  const { id } = await res.json()
+  const { id, projectId } = await res.json()
+
+  // Disable protection on the project so the preview URL is publicly accessible
+  if (projectId) {
+    await fetch(`https://api.vercel.com/v9/projects/${projectId}${teamParam}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssoProtection: null, passwordProtection: null }),
+    }).catch(() => {})
+  }
 
   for (let i = 0; i < 20; i++) {
     await sleep(3000)
