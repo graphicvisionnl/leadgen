@@ -481,14 +481,75 @@ app.post('/run', async (req, res) => {
 })
 
 // ─── Send email ───────────────────────────────────────────────────────────────
-app.post('/send-email/:id', async (req, res) => {
+// ─── Generate email with Claude ───────────────────────────────────────────────
+app.post('/generate-email/:id', async (req, res) => {
   const { id } = req.params
-  const { subject, body } = req.body
 
   const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
   if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
-  if (!lead.email) return res.status(400).json({ error: 'Lead heeft geen e-mailadres' })
   if (!lead.preview_url) return res.status(400).json({ error: 'Nog geen preview URL' })
+
+  try {
+    const emailPrefix = (lead.email ?? '').split('@')[0].toLowerCase()
+    const genericPrefixes = ['info', 'contact', 'hello', 'hallo', 'mail', 'post', 'office', 'admin', 'support', 'service', 'team', 'sales', 'marketing', 'hoi', 'algemeen', 'receptie', 'secretariaat', 'welkom', 'webmaster']
+    const isGeneric = !lead.email || genericPrefixes.some(p => emailPrefix === p || emailPrefix.startsWith(p + '.'))
+
+    const firstName = isGeneric ? null : (() => {
+      const namePart = emailPrefix.split(/[._-]/)[0]
+      return (namePart && namePart.length > 1 && /^[a-z]/i.test(namePart))
+        ? namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase()
+        : null
+    })()
+
+    const greeting = firstName ? `Hey ${firstName},` : 'Goedendag,'
+    const subject = firstName
+      ? `Ik heb iets voor je gemaakt, ${firstName}`
+      : `Nieuw websiteconcept voor ${lead.company_name}`
+
+    const prompt = `Schrijf een overtuigende Nederlandse verkoop-e-mail namens Ezra van Graphic Vision.
+
+Bedrijf: ${lead.company_name}
+Niche: ${lead.niche}${lead.city ? `\nStad: ${lead.city}` : ''}
+Preview URL: ${lead.preview_url}
+
+Eisen voor de e-mail:
+- Begin EXACT met: "${greeting}"
+- Vertel kort wie Graphic Vision is: een webdesign bureau dat moderne, converterende websites bouwt voor lokale bedrijven in Nederland
+- Benoem dat wij de website van ${lead.company_name} hebben bekeken en zien dat er ruimte is voor verbetering
+- Benoem dat wij begrijpen dat een nieuwe website duur kan lijken, maar dat wij een volledige websiteupgrade aanbieden voor een vaste, eerlijke prijs van €500
+- Vertel dat wij alvast een gratis concept hebben gemaakt als indicatie van wat mogelijk is — zet de preview URL op een EIGEN REGEL, voorafgegaan door "→ "
+- Maak duidelijk dat dit concept nog niet de definitieve website is, maar een eerste impressie om te laten zien wat we kunnen
+- Eindig met een uitnodiging om te reageren met vragen of interesse
+- Gebruik als afsluiting EXACT: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Maximaal 5 korte alinea's, scanbaar en overtuigend, geen bullet points
+- Ton: persoonlijk, direct, niet opdringerig
+
+Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
+
+    const response = await claude.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 700,
+      messages: [{ role: 'user', content: prompt }],
+    })
+
+    const body = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+    res.json({ subject, body })
+  } catch (e) {
+    log('Mail', `Genereren mislukt: ${e}`)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+app.post('/send-email/:id', async (req, res) => {
+  const { id } = req.params
+  const { subject, body, emailTo } = req.body
+
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+  if (!lead.preview_url) return res.status(400).json({ error: 'Nog geen preview URL' })
+
+  const recipientEmail: string = emailTo || lead.email
+  if (!recipientEmail) return res.status(400).json({ error: 'Geen e-mailadres opgegeven' })
 
   const { data: settingsRows } = await supabase.from('settings').select('*')
   const settings = Object.fromEntries(
@@ -609,14 +670,14 @@ app.post('/send-email/:id', async (req, res) => {
 
     await transport.sendMail({
       from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
-      to: lead.email,
+      to: recipientEmail,
       subject: subject ?? defaultSubject,
       html,
       text: plainText,
     })
 
     await supabase.from('leads').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
-    log('Mail', `Verzonden naar ${lead.email}`)
+    log('Mail', `Verzonden naar ${recipientEmail}`)
     res.json({ success: true })
   } catch (e) {
     log('Mail', `Fout bij versturen naar ${lead.email}: ${e}`)

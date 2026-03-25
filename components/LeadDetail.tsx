@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Lead, LeadStatus } from '@/types'
 import { StatusBadge } from './StatusBadge'
 
@@ -15,24 +15,33 @@ export function LeadDetail({ lead }: LeadDetailProps) {
   const [sendError, setSendError] = useState('')
 
   // Email compose state
+  const [emailTo, setEmailTo] = useState(lead.email ?? '')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
-  const [draftLoaded, setDraftLoaded] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState('')
   const [showPreview, setShowPreview] = useState(false)
 
-  const canCompose = !!lead.email && !!lead.preview_url && !sent
+  const canCompose = !!lead.preview_url && !sent
+  const draftReady = subject !== '' && body !== ''
 
-  useEffect(() => {
-    if (!canCompose) return
-    fetch(`/api/leads/${lead.id}/email-draft`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.subject) setSubject(data.subject)
-        if (data.plainText) setBody(data.plainText)
-        setDraftLoaded(true)
-      })
-      .catch(() => setDraftLoaded(true))
-  }, [lead.id, canCompose])
+  async function generateDraft() {
+    setGenerating(true)
+    setGenerateError('')
+    setShowPreview(false)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/generate-email`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setSubject(data.subject ?? '')
+        setBody(data.body ?? '')
+      } else {
+        setGenerateError(data.error ?? 'Genereren mislukt')
+      }
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   async function handleSendMail() {
     setSending(true)
@@ -41,7 +50,7 @@ export function LeadDetail({ lead }: LeadDetailProps) {
       const res = await fetch(`/api/leads/${lead.id}/send-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject, body }),
+        body: JSON.stringify({ subject, body, emailTo }),
       })
       const data = await res.json()
       if (res.ok) {
@@ -54,19 +63,20 @@ export function LeadDetail({ lead }: LeadDetailProps) {
     }
   }
 
-  // Convert plain text to preview HTML (same logic as server)
   function toPreviewHtml(text: string): string {
+    const previewUrl = lead.preview_url ?? ''
     const lines = text.split('\n').map(line => {
-      if (lead.preview_url && line.includes(lead.preview_url)) {
-        return line.replace(
-          lead.preview_url,
-          `<a href="${lead.preview_url}" style="color:#FF794F;font-weight:bold;">${lead.preview_url}</a>`
+      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      if (previewUrl && line.includes(previewUrl)) {
+        return escaped.replace(
+          previewUrl,
+          `<a href="${previewUrl}" style="color:#FF794F;font-weight:bold;">${previewUrl}</a>`
         )
       }
-      return line
+      return escaped
     })
-    return '<p style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">' +
-      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">') +
+    return '<p style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#1a1a1a;margin:0 0 12px">' +
+      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#1a1a1a;margin:0 0 12px">') +
       '</p>'
   }
 
@@ -103,12 +113,8 @@ export function LeadDetail({ lead }: LeadDetailProps) {
             <p className="text-white/40 text-xs uppercase tracking-wider mb-1">{label}</p>
             {value ? (
               link ? (
-                <a
-                  href={value}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-brand text-sm hover:underline break-all"
-                >
+                <a href={value} target="_blank" rel="noopener noreferrer"
+                  className="text-brand text-sm hover:underline break-all">
                   {value.replace(/^https?:\/\//, '').slice(0, 40)}
                 </a>
               ) : (
@@ -129,45 +135,29 @@ export function LeadDetail({ lead }: LeadDetailProps) {
         </div>
       )}
 
-      {/* Screenshots side by side */}
+      {/* Screenshots */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
           <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Originele website</p>
           <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
             {lead.screenshot_url ? (
-              <Image
-                src={lead.screenshot_url}
-                alt="Screenshot originele site"
-                width={640}
-                height={360}
-                className="w-full h-full object-cover object-top"
-                unoptimized
-              />
+              <Image src={lead.screenshot_url} alt="Screenshot originele site"
+                width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
             ) : (
               <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
             )}
           </div>
         </div>
-
         <div>
           <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Gegenereerde preview</p>
           <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
             {lead.preview_screenshot_url ? (
-              <Image
-                src={lead.preview_screenshot_url}
-                alt="Screenshot preview"
-                width={640}
-                height={360}
-                className="w-full h-full object-cover object-top"
-                unoptimized
-              />
+              <Image src={lead.preview_screenshot_url} alt="Screenshot preview"
+                width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
             ) : lead.preview_url ? (
-              <iframe
-                src={lead.preview_url}
+              <iframe src={lead.preview_url}
                 className="w-full h-full border-0 scale-[0.5] origin-top-left"
-                style={{ width: '200%', height: '200%' }}
-                title="Preview"
-              />
+                style={{ width: '200%', height: '200%' }} title="Preview" />
             ) : (
               <p className="text-white/25 text-sm">Preview nog niet gegenereerd</p>
             )}
@@ -175,15 +165,10 @@ export function LeadDetail({ lead }: LeadDetailProps) {
         </div>
       </div>
 
-      {/* Preview link */}
       {lead.preview_url && (
         <div>
-          <a
-            href={lead.preview_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors"
-          >
+          <a href={lead.preview_url} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors">
             Bekijk preview →
           </a>
         </div>
@@ -195,39 +180,95 @@ export function LeadDetail({ lead }: LeadDetailProps) {
           <p className="text-white/40 text-xs uppercase tracking-wider mb-1">E-mail</p>
           <p className="text-green-400 text-sm font-medium">✓ Mail verzonden naar {lead.email}</p>
         </div>
-      ) : canCompose ? (
+      ) : !canCompose ? (
+        <div className="bg-surface rounded-xl border border-subtle p-5">
+          <p className="text-white/40 text-xs uppercase tracking-wider mb-1">E-mail</p>
+          <p className="text-white/40 text-sm">
+            {!lead.preview_url ? 'Deploy eerst een preview voordat je een mail kunt sturen.' : 'Geen e-mailadres gevonden voor deze lead.'}
+          </p>
+        </div>
+      ) : (
         <div className="bg-surface rounded-xl border border-subtle p-6 space-y-5">
+          {/* Header row */}
           <div className="flex items-center justify-between">
             <p className="text-white/40 text-xs uppercase tracking-wider">E-mail concept</p>
-            <button
-              onClick={() => setShowPreview(p => !p)}
-              className="text-xs text-white/40 hover:text-white/70 transition-colors"
-            >
-              {showPreview ? 'Bewerken' : 'Voorbeeld →'}
-            </button>
+            <div className="flex items-center gap-3">
+              {draftReady && (
+                <button onClick={() => setShowPreview(p => !p)}
+                  className="text-xs text-white/40 hover:text-white/70 transition-colors">
+                  {showPreview ? '← Bewerken' : 'Voorbeeld →'}
+                </button>
+              )}
+              <button
+                onClick={generateDraft}
+                disabled={generating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white hover:border-white/20 transition-colors disabled:opacity-50"
+              >
+                {generating ? (
+                  <><span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />Genereren…</>
+                ) : draftReady ? (
+                  '↻ Regenereer'
+                ) : (
+                  '✦ Genereer mail'
+                )}
+              </button>
+            </div>
           </div>
 
-          {!draftLoaded ? (
-            <p className="text-white/30 text-sm">Concept laden…</p>
+          {generateError && (
+            <p className="text-red-400 text-xs">{generateError}</p>
+          )}
+
+          {!draftReady && !generating ? (
+            <div className="py-8 text-center">
+              <p className="text-white/30 text-sm mb-4">Klik op "Genereer mail" om een gepersonaliseerde e-mail te maken met Claude.</p>
+              <button
+                onClick={generateDraft}
+                className="px-5 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors"
+              >
+                ✦ Genereer mail
+              </button>
+            </div>
+          ) : generating ? (
+            <div className="py-8 text-center">
+              <span className="w-5 h-5 border-2 border-white/20 border-t-brand rounded-full animate-spin inline-block mb-3" />
+              <p className="text-white/30 text-sm">Mail genereren met Claude…</p>
+            </div>
           ) : showPreview ? (
-            /* Rendered email preview */
-            <div className="bg-white rounded-lg p-6 border border-white/10">
-              <div className="mb-4 pb-4 border-b border-gray-200 space-y-1">
-                <p className="text-xs text-gray-400">Aan: <span className="text-gray-700">{lead.email}</span></p>
-                <p className="text-xs text-gray-400">Onderwerp: <span className="text-gray-700 font-medium">{subject}</span></p>
+            /* Rendered preview */
+            <div className="bg-white rounded-lg overflow-hidden border border-white/10">
+              {/* Email header preview */}
+              <div style={{ background: '#0f0f0f', padding: '20px 28px' }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-wit.png"
+                  alt="Graphic Vision" style={{ height: '30px', objectFit: 'contain' }}
+                />
               </div>
-              <div
-                dangerouslySetInnerHTML={{ __html: toPreviewHtml(body) }}
-              />
+              <div className="p-6 pb-4">
+                <div className="mb-4 pb-3 border-b border-gray-100 space-y-1">
+                  <p className="text-xs text-gray-400">Aan: <span className="text-gray-700">{emailTo}</span></p>
+                  <p className="text-xs text-gray-400">Onderwerp: <span className="text-gray-700 font-medium">{subject}</span></p>
+                </div>
+                <div dangerouslySetInnerHTML={{ __html: toPreviewHtml(body) }} />
+              </div>
+              <div style={{ background: '#fafafa', padding: '16px 28px', borderTop: '1px solid #eee' }}>
+                <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
+                  Ezra — Graphic Vision · <a href="https://graphicvision.nl" style={{ color: '#FF794F' }}>graphicvision.nl</a>
+                </p>
+              </div>
             </div>
           ) : (
             /* Edit mode */
             <div className="space-y-3">
               <div>
                 <label className="block text-xs text-white/40 mb-1.5">Aan</label>
-                <p className="text-sm text-white/60 bg-surface-2 border border-subtle rounded-lg px-3 py-2">
-                  {lead.email}
-                </p>
+                <input
+                  type="email"
+                  value={emailTo}
+                  onChange={e => setEmailTo(e.target.value)}
+                  className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+                />
               </div>
               <div>
                 <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
@@ -243,39 +284,29 @@ export function LeadDetail({ lead }: LeadDetailProps) {
                 <textarea
                   value={body}
                   onChange={e => setBody(e.target.value)}
-                  rows={10}
+                  rows={12}
                   className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 font-mono resize-y"
                 />
               </div>
             </div>
           )}
 
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              onClick={handleSendMail}
-              disabled={sending || !subject || !body}
-              className="px-5 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {sending ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Versturen…
-                </>
-              ) : (
-                'Verstuur mail →'
-              )}
-            </button>
-            {sendError && (
-              <span className="text-red-400 text-sm">{sendError}</span>
-            )}
-          </div>
+          {draftReady && !generating && (
+            <div className="flex items-center gap-3 pt-1 border-t border-subtle">
+              <button
+                onClick={handleSendMail}
+                disabled={sending || !emailTo || !subject || !body}
+                className="mt-3 px-5 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {sending ? (
+                  <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Versturen…</>
+                ) : 'Verstuur mail →'}
+              </button>
+              {sendError && <span className="text-red-400 text-sm mt-3">{sendError}</span>}
+            </div>
+          )}
         </div>
-      ) : !lead.email ? (
-        <div className="bg-surface rounded-xl border border-subtle p-5">
-          <p className="text-white/40 text-xs uppercase tracking-wider mb-1">E-mail</p>
-          <p className="text-white/40 text-sm">Geen e-mailadres gevonden voor deze lead.</p>
-        </div>
-      ) : null}
+      )}
     </div>
   )
 }
