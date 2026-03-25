@@ -48,7 +48,7 @@ function isValidUrl(url: string): boolean {
 
 function loadSkill(filename: string): string {
   try {
-    return fs.readFileSync(path.join(__dirname, '../lib/skills', filename), 'utf-8')
+    return fs.readFileSync(path.join(__dirname, '../../lib/skills', filename), 'utf-8')
   } catch { return '' }
 }
 
