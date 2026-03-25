@@ -253,7 +253,7 @@ ${loadSkill('redesign-skill.md')}`
       const websiteText = await fetchWebsiteText(lead.website_url)
       log('Phase 3', `Website content: ${websiteText.length} chars`)
 
-      const prompt = `Create a complete, professional single-page website redesign. Return ONLY valid HTML starting with <!DOCTYPE html>.
+      const prompt = `Create a complete, professional long-form single-page website. Return ONLY valid HTML starting with <!DOCTYPE html>.
 
 ORIGINAL WEBSITE CONTENT (extract phone, address, email, services, company info):
 ${websiteText || 'Not available'}
@@ -267,30 +267,38 @@ BUSINESS:
 DESIGN:
 - White background (#FFFFFF), clean and modern
 - Google Font: Inter (via @import in <style>)
-- Primary accent: a bold, industry-appropriate color (e.g. for plumber: #E8580A orange or #1B4FD8 blue — pick one that fits)
-- Real Unsplash photos — use: https://images.unsplash.com/photo-{ID}?auto=format&fit=crop&w=1200&q=80
-  Pick relevant photo IDs for "${lead.niche}" (e.g. for plumber: 1621905251189-08b45d6a269e, 1558618666-fcd25c85cd64)
+- Primary accent: bold industry-appropriate color (for plumber/installer: #E8580A orange works well)
+- Real Unsplash photos — format: https://images.unsplash.com/photo-{ID}?auto=format&fit=crop&w=1200&q=80
+  Use relevant IDs for "${lead.niche}" — plumber examples: 1621905251189-08b45d6a269e, 1558618666-fcd25c85cd64, 1581578731548-c64695cc6952, 1504328345606-18bbc8c9d7d1
 - All CSS in <style> tag only
-- Fully self-contained, no external dependencies except Google Fonts + Unsplash images
+- No external dependencies except Google Fonts + Unsplash
 
-REQUIRED SECTIONS:
-1. STICKY HEADER — logo text left, nav links center, phone CTA button right (use real phone from original site)
-2. HERO — split layout or full-width image, bold headline, subtext, two CTAs: "Bel Nu" (phone) + "Offerte Aanvragen"
-3. SERVICES — 3–4 service cards with SVG icon, title, 1-line description (specific to their industry)
-4. TRUST — 3 columns: Google rating stars, response time / availability, years experience
-5. ABOUT — 2-column: left text (company story, 2–3 sentences based on original content), right Unsplash image
-6. CONTACT — left column: address, phone, email from original site. Right column: simple HTML form (name, email, message, submit)
-7. FOOTER — company name, address, phone, © 2025
+REQUIRED SECTIONS (in order):
+1. EMERGENCY BANNER — thin bar at very top, accent background, "24/7 Bereikbaar — Bel direct: [phone]", close button optional
+2. STICKY HEADER — logo left, nav center (Home, Diensten, Over ons, Reviews, Contact), phone CTA button right
+3. HERO — large split layout, bold headline + subheadline, two CTAs: "Bel Nu [phone]" + "Gratis Offerte", Unsplash background/image, Google rating badge
+4. SERVICES — 4–6 service cards with SVG icon, title, 2-line description specific to their niche
+5. HOW IT WORKS — 3 steps with numbered icons: "1. Bel ons" → "2. We komen langs" → "3. Probleem opgelost", each with short description
+6. TRUST STATS — 4 large numbers: Google rating, number of reviews, response time (e.g. "< 60 min"), years active
+7. ABOUT — 2-column: left side company story paragraph (based on original content), right side Unsplash image + a small detail list (KVK area, service area, etc.)
+8. REVIEWS — 3 customer review cards, generate realistic Dutch reviews based on the niche and Google rating (${lead.google_rating ?? '4.8'} stars), include first name + city
+9. GALLERY — 3-image grid using different Unsplash photos relevant to the work/niche
+10. FAQ — 4 questions and answers in accordion style (CSS only, no JS), questions specific to "${lead.niche}" in Dutch
+11. CONTACT — left: address, phone, email, working hours. Right: form with name, phone, email, message, submit button
+12. FOOTER — logo, short tagline, address, phone, email, © 2025 ${lead.company_name}
+
+EXTRAS:
+- Floating WhatsApp button bottom-left: green circle with WhatsApp SVG icon, links to wa.me/31[phone without 0]
+- Fixed "Concept door Graphic Vision" badge bottom-right, small pill in accent color
 
 RULES:
-- Write all copy in Dutch
-- Extract and use the REAL phone number from the original content above — if not found, write "Bel ons"
-- Extract and use the REAL address/city
-- NO lorem ipsum, NO placeholder text
-- Show Google rating (${lead.google_rating ?? 'N/A'} ⭐) as a trust badge in the hero or trust section
-- Fixed badge bottom-right: small pill "Concept door Graphic Vision" in the accent color
-- Keep CSS compact — no redundant rules, no keyframe animations, max ~200 lines of CSS
-- Complete the entire page — do not cut off`
+- All copy in Dutch
+- Use REAL phone number from original content — if not found use a placeholder like "020-XXXXXXX"
+- Use REAL address/city from original content
+- NO lorem ipsum
+- Google rating ${lead.google_rating ?? 'N/A'} ⭐ prominently in hero and trust stats
+- Keep CSS efficient — reuse classes, no redundant rules
+- Complete the ENTIRE page — every section, closing </body></html>`
 
       const response = await (claude.messages.create as Function)(
         { model: 'claude-sonnet-4-6', max_tokens: 16000, system, messages: [{ role: 'user', content: prompt }] },
