@@ -536,10 +536,24 @@ app.post('/generate-email/:id', async (req, res) => {
         : null
     })()
 
+    // Extract short brand name — take text before first |, &, ·, -, or long suffix
+    const shortName = (lead.company_name ?? '')
+      .split(/[|&·]/)[0]
+      .trim()
+      .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '')
+      .trim()
+
     const greeting = firstName ? `Hey ${firstName},` : 'Goedendag,'
+
+    // Short, personal, curiosity-driven subjects — no full company names
+    const genericSubjects = [
+      `Ik maakte iets voor jullie website`,
+      `Even iets laten zien`,
+      `Gratis concept voor ${shortName}`,
+    ]
     const subject = firstName
-      ? `Ik heb iets voor je gemaakt, ${firstName}`
-      : `Nieuw websiteconcept voor ${lead.company_name}`
+      ? `Snel iets voor je gemaakt, ${firstName}`
+      : genericSubjects[0]
 
     const prompt = `Schrijf een overtuigende Nederlandse verkoop-e-mail namens Ezra van Graphic Vision.
 
@@ -605,9 +619,9 @@ app.post('/send-email/:id', async (req, res) => {
     const previewUrl: string = lead.preview_url
     const plainText: string = body ?? ''
 
-    const firstName = lead.email.split('@')[0].split(/[._-]/)[0]
+    const firstName = recipientEmail.split('@')[0].split(/[._-]/)[0]
     const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
-    const defaultSubject = `Ik heb iets voor je gebouwd, ${name}`
+    const defaultSubject = `Snel iets voor je gemaakt, ${name}`
 
     const ctaButton = `
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px">
