@@ -284,13 +284,16 @@ RULES:
 - NO lorem ipsum, NO placeholder text
 - Show Google rating (${lead.google_rating ?? 'N/A'} ⭐) as a trust badge in the hero or trust section
 - Fixed badge bottom-right: small pill "Concept door Graphic Vision" in the accent color
+- Keep CSS compact — no redundant rules, no keyframe animations, max ~200 lines of CSS
 - Complete the entire page — do not cut off`
 
       const response = await claude.messages.create({
         model: 'claude-sonnet-4-6',
-        max_tokens: 8000,
+        max_tokens: 16000,
         system,
         messages: [{ role: 'user', content: prompt }],
+        // @ts-ignore
+        betas: ['output-128k-2025-02-19'],
       })
 
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
