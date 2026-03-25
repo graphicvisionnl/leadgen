@@ -216,7 +216,12 @@ async function phase2(runId: string) {
 async function fetchWebsiteText(url: string): Promise<string> {
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'nl,en;q=0.9',
+      },
+      redirect: 'follow',
       signal: AbortSignal.timeout(12000),
     })
     if (!res.ok) return ''
@@ -287,14 +292,10 @@ RULES:
 - Keep CSS compact — no redundant rules, no keyframe animations, max ~200 lines of CSS
 - Complete the entire page — do not cut off`
 
-      const response = await claude.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 16000,
-        system,
-        messages: [{ role: 'user', content: prompt }],
-        // @ts-ignore
-        betas: ['output-128k-2025-02-19'],
-      })
+      const response = await (claude.messages.create as Function)(
+        { model: 'claude-sonnet-4-6', max_tokens: 16000, system, messages: [{ role: 'user', content: prompt }] },
+        { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } }
+      )
 
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
       const html = text.substring(text.indexOf('<!DOCTYPE html>'))
