@@ -516,10 +516,9 @@ Eisen voor de e-mail:
 - Begin EXACT met: "${greeting}"
 - Vertel kort wie Graphic Vision is: een webdesign bureau dat moderne, converterende websites bouwt voor lokale bedrijven in Nederland
 - Benoem dat wij de website van ${lead.company_name} hebben bekeken en zien dat er ruimte is voor verbetering
-- Benoem dat wij begrijpen dat een nieuwe website duur kan lijken, maar dat wij een volledige websiteupgrade aanbieden voor een vaste, eerlijke prijs van €500
 - Vertel dat wij alvast een gratis concept hebben gemaakt als indicatie van wat mogelijk is — zet de preview URL op een EIGEN REGEL, voorafgegaan door "→ "
 - Maak duidelijk dat dit concept nog niet de definitieve website is, maar een eerste impressie om te laten zien wat we kunnen
-- Eindig met een uitnodiging om te reageren met vragen of interesse
+- Eindig met een uitnodiging om vrijblijvend contact op te nemen — geen druk, gewoon een gesprek
 - Gebruik als afsluiting EXACT: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
 - Maximaal 5 korte alinea's, scanbaar en overtuigend, geen bullet points
 - Ton: persoonlijk, direct, niet opdringerig
