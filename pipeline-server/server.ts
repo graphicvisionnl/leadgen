@@ -300,8 +300,9 @@ RULES:
 - Keep CSS efficient — reuse classes, no redundant rules
 - Complete the ENTIRE page — every section, closing </body></html>`
 
+      const htmlModel = process.env.HTML_MODEL ?? 'claude-haiku-4-5-20251001'
       const response = await (claude.messages.create as Function)(
-        { model: 'claude-sonnet-4-6', max_tokens: 32000, system, messages: [{ role: 'user', content: prompt }] },
+        { model: htmlModel, max_tokens: 32000, system, messages: [{ role: 'user', content: prompt }] },
         { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } }
       )
 
