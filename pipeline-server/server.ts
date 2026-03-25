@@ -603,6 +603,10 @@ app.post('/send-email/:id', async (req, res) => {
   const recipientEmail: string = emailTo || lead.email
   if (!recipientEmail) return res.status(400).json({ error: 'Geen e-mailadres opgegeven' })
 
+  // Fall back to stored draft if not provided in request
+  const finalSubject: string | undefined = subject || lead.email_subject || undefined
+  const finalBody: string = body || lead.email_body || ''
+
   const { data: settingsRows } = await supabase.from('settings').select('*')
   const settings = Object.fromEntries(
     (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
@@ -617,7 +621,7 @@ app.post('/send-email/:id', async (req, res) => {
     })
 
     const previewUrl: string = lead.preview_url
-    const plainText: string = body ?? ''
+    const plainText: string = finalBody
 
     const firstName = recipientEmail.split('@')[0].split(/[._-]/)[0]
     const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
@@ -716,7 +720,7 @@ app.post('/send-email/:id', async (req, res) => {
       from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
       to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
-      subject: subject ?? defaultSubject,
+      subject: finalSubject ?? defaultSubject,
       html,
       text: plainText,
     })
