@@ -609,39 +609,31 @@ app.post('/send-email/:id', async (req, res) => {
     const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
     const defaultSubject = `Ik heb iets voor je gebouwd, ${name}`
 
-    // Convert plain text body paragraphs to HTML rows for the email
-    const bodyParagraphs = plainText
-      .split('\n\n')
-      .filter(p => p.trim())
-      .map(para => {
-        const escaped = para
-          .split('\n')
-          .map((line: string) => line
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-          )
-          .join('<br>')
-        return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
-      })
-      .join('')
-
-    // CTA button replaces the preview URL line
-    const ctaHtml = `
+    const ctaButton = `
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px">
         <tr>
           <td>
             <a href="${previewUrl}" target="_blank"
-               style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 28px;border-radius:8px;letter-spacing:0.3px">
+               style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px;letter-spacing:0.3px">
               Bekijk jouw nieuwe website →
             </a>
           </td>
         </tr>
       </table>`
 
-    // Strip the raw URL line from body paragraphs and inject CTA after second paragraph
-    const cleanBody = bodyParagraphs.replace(
-      new RegExp(`<p[^>]*>.*?${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*?</p>`, 's'),
-      ctaHtml
-    )
+    // Convert plain text to HTML — replace any paragraph containing the URL with the CTA button
+    const cleanBody = plainText
+      .split('\n\n')
+      .filter(p => p.trim())
+      .map(para => {
+        if (para.includes(previewUrl)) return ctaButton
+        const escaped = para
+          .split('\n')
+          .map((line: string) => line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'))
+          .join('<br>')
+        return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
+      })
+      .join('')
 
     const html = `<!DOCTYPE html>
 <html lang="nl">

@@ -73,19 +73,23 @@ export function LeadDetail({ lead }: LeadDetailProps) {
 
   function toPreviewHtml(text: string): string {
     const previewUrl = lead.preview_url ?? ''
-    const lines = text.split('\n').map(line => {
-      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      if (previewUrl && line.includes(previewUrl)) {
-        return escaped.replace(
-          previewUrl,
-          `<a href="${previewUrl}" style="color:#FF794F;font-weight:bold;">${previewUrl}</a>`
-        )
-      }
-      return escaped
-    })
-    return '<p style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#1a1a1a;margin:0 0 12px">' +
-      lines.join('<br>').replace(/<br><br>/g, '</p><p style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#1a1a1a;margin:0 0 12px">') +
-      '</p>'
+    const pStyle = 'font-family:sans-serif;font-size:14px;line-height:1.7;color:#1a1a1a;margin:0 0 12px'
+    const ctaButton = previewUrl
+      ? `<a href="${previewUrl}" target="_blank" style="display:inline-block;background:#FF794F;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 24px;border-radius:8px;margin:4px 0 12px">Bekijk jouw nieuwe website →</a>`
+      : ''
+
+    return text
+      .split('\n\n')
+      .filter(p => p.trim())
+      .map(para => {
+        if (previewUrl && para.includes(previewUrl)) return ctaButton
+        const escaped = para
+          .split('\n')
+          .map(line => line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'))
+          .join('<br>')
+        return `<p style="${pStyle}">${escaped}</p>`
+      })
+      .join('')
   }
 
   return (
