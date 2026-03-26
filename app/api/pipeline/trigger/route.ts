@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
-  const { phase } = await request.json()
-  if (!['phase2', 'phase3', 'phase4'].includes(phase)) {
+  const body = await request.json()
+  const { phase, niche, city, maxLeads } = body
+
+  if (!['phase1', 'phase2', 'phase3', 'phase4'].includes(phase)) {
     return NextResponse.json({ error: 'Ongeldige phase' }, { status: 400 })
   }
 
@@ -15,6 +17,7 @@ export async function POST(request: NextRequest) {
   const res = await fetch(`${pipelineUrl}/run/${phase}`, {
     method: 'POST',
     headers: { 'x-pipeline-secret': pipelineSecret, 'Content-Type': 'application/json' },
+    body: phase === 'phase1' ? JSON.stringify({ niche, city, maxLeads }) : undefined,
   }).catch(() => null)
 
   if (!res?.ok) return NextResponse.json({ error: 'Hetzner fout' }, { status: 502 })
