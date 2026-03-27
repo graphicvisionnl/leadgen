@@ -7,6 +7,14 @@ import { nl } from 'date-fns/locale'
 import { Lead, LeadStatus } from '@/types'
 import { StatusBadge } from './StatusBadge'
 
+const NEXT_PHASE_LABEL: Record<string, string> = {
+  scraped:    'Kwalificeren',
+  no_email:   'Kwalificeren',
+  error:      'Opnieuw kwalificeren',
+  qualified:  'Genereer',
+  redesigned: 'Deployen',
+}
+
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'all',          label: 'Alles' },
   { value: 'scraped',      label: 'Gescraped' },
@@ -26,6 +34,18 @@ interface LeadsTableProps {
 
 export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onRefresh }: LeadsTableProps) {
   const [deletingAll, setDeletingAll] = useState(false)
+  const [advancing, setAdvancing] = useState<string | null>(null)
+
+  async function advanceLead(lead: Lead) {
+    setAdvancing(lead.id)
+    await fetch(`/api/leads/${lead.id}/advance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: lead.status }),
+    })
+    setAdvancing(null)
+    onRefresh()
+  }
 
   async function deleteAllDisqualified() {
     if (!confirm('Alle afgewezen leads verwijderen? Dit kan niet ongedaan worden gemaakt.')) return
@@ -80,18 +100,19 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                 <th className="text-left text-white/40 font-medium px-4 py-3">Status</th>
                 <th className="text-left text-white/40 font-medium px-4 py-3">Preview</th>
                 <th className="text-left text-white/40 font-medium px-4 py-3">Toegevoegd</th>
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-white/30">
+                  <td colSpan={8} className="text-center py-12 text-white/30">
                     Laden…
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-white/30">
+                  <td colSpan={8} className="text-center py-12 text-white/30">
                     Geen leads gevonden
                   </td>
                 </tr>
@@ -168,6 +189,19 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                         addSuffix: true,
                         locale: nl,
                       })}
+                    </td>
+                    <td className="px-4 py-3">
+                      {NEXT_PHASE_LABEL[lead.status] && (
+                        <button
+                          onClick={() => advanceLead(lead)}
+                          disabled={advancing !== null}
+                          className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/50 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
+                        >
+                          {advancing === lead.id
+                            ? <><span className="w-2.5 h-2.5 border border-white/30 border-t-white rounded-full animate-spin" />Bezig…</>
+                            : `▶ ${NEXT_PHASE_LABEL[lead.status]}`}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

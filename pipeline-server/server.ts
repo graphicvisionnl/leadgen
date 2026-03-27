@@ -25,31 +25,124 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// ─── kie.ai Claude helper ─────────────────────────────────────────────────────
+// ─── kie.ai Haiku helper (qualify + email — fast & cheap) ────────────────────
 async function callClaude(params: {
-  model: string
+  model?: string
   system?: string
   messages: any[]
   max_tokens: number
-  extendedOutput?: boolean
 }): Promise<{ content: any[]; stop_reason: string; usage: any }> {
+  const model = params.model ?? 'claude-haiku-4-5'
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${process.env.KIE_API_KEY}`,
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
   }
-  if (params.extendedOutput) headers['anthropic-beta'] = 'output-128k-2025-02-19'
+  const body: any = { model, max_tokens: params.max_tokens, messages: params.messages, stream: false }
+  if (params.system) body.system = params.system
 
-  const body: any = { model: params.model, max_tokens: params.max_tokens, messages: params.messages, stream: false }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch('https://api.kie.ai/claude/v1/messages', {
+        method: 'POST', headers, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
+      return res.json()
+    } catch (e) {
+      if (attempt === 3) throw e
+      log('Retry', `callClaude attempt ${attempt} mislukt: ${e} — wacht 10s`)
+      await sleep(10_000)
+    }
+  }
+  throw new Error('callClaude: alle pogingen mislukt')
+}
+
+// ─── kie.ai Opus streaming helper (phase3 HTML) ───────────────────────────────
+// Streams SSE so TCP stays alive during 5-min generation. Retries up to 3×.
+async function callKieStreaming(params: {
+  model: string
+  system?: string
+  messages: any[]
+  max_tokens: number
+}): Promise<{ content: any[]; stop_reason: string; usage: any }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await callKieStreamingOnce(params)
+    } catch (e) {
+      if (attempt === 3) throw e
+      log('Retry', `callKieStreaming attempt ${attempt} mislukt: ${e} — wacht 20s`)
+      await sleep(20_000)
+    }
+  }
+  throw new Error('callKieStreaming: alle pogingen mislukt')
+}
+
+async function callKieStreamingOnce(params: {
+  model: string
+  system?: string
+  messages: any[]
+  max_tokens: number
+}): Promise<{ content: any[]; stop_reason: string; usage: any }> {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${process.env.KIE_API_KEY}`,
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'output-128k-2025-02-19',
+  }
+
+  const body: any = { model: params.model, max_tokens: params.max_tokens, messages: params.messages, stream: true }
   if (params.system) body.system = params.system
 
   const res = await fetch('https://api.kie.ai/claude/v1/messages', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
   })
   if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
-  return res.json()
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let fullText = ''
+  let stopReason = 'end_turn'
+  let inputTokens = 0
+  let outputTokens = 0
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const payload = line.slice(6).trim()
+      if (payload === '[DONE]') break
+      try {
+        const event = JSON.parse(payload)
+        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          fullText += event.delta.text ?? ''
+        } else if (event.type === 'message_delta') {
+          if (event.delta?.stop_reason) stopReason = event.delta.stop_reason
+          if (event.usage?.output_tokens) outputTokens = event.usage.output_tokens
+        } else if (event.type === 'message_start' && event.message?.usage) {
+          inputTokens = event.message.usage.input_tokens ?? 0
+        } else if (event.type === 'error') {
+          throw new Error(`kie.ai stream error: ${JSON.stringify(event.error ?? event)}`)
+        }
+      } catch (parseErr) {
+        if (String(parseErr).includes('kie.ai stream error')) throw parseErr
+      }
+    }
+  }
+
+  return {
+    content: [{ type: 'text', text: fullText }],
+    stop_reason: stopReason,
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  }
 }
 
 // ─── Log buffer ───────────────────────────────────────────────────────────────
@@ -106,7 +199,7 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   if (status !== 'SUCCEEDED') throw new Error(`Apify run failed: ${status}`)
 
   const resultsRes = await fetch(
-    `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=${maxLeads}`
+    `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=1000`
   )
   const businesses = await resultsRes.json()
   log('Phase 1', `${businesses.length} bedrijven ontvangen`)
@@ -163,52 +256,39 @@ async function scrapeEmail(url: string): Promise<string | null> {
   return null
 }
 
-async function phase2(runId: string) {
-  log('Phase 2', 'Email scrapen + kwalificeren')
-  const { data: leads } = await supabase.from('leads').select('*')
-    .in('status', ['scraped', 'no_email']).not('website_url', 'is', null)
+async function phase2SingleLead(lead: any, browser: any): Promise<boolean> {
+  log('Phase 2', lead.company_name)
+  let email = lead.email
+  if (!email) {
+    email = await scrapeEmail(lead.website_url)
+    if (email) await supabase.from('leads').update({ email }).eq('id', lead.id)
+  }
 
-  if (!leads?.length) { log('Phase 2', 'Geen leads'); return }
-  log('Phase 2', `${leads.length} leads`)
-
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
-  let qualified = 0
-
+  let screenshotBase64 = ''
+  let screenshotBuffer: Buffer | null = null
   try {
-    for (const lead of leads) {
-      log('Phase 2', lead.company_name)
-      let email = lead.email
-      if (!email) {
-        email = await scrapeEmail(lead.website_url)
-        if (email) await supabase.from('leads').update({ email }).eq('id', lead.id)
-      }
+    const page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 900 })
+    await page.goto(lead.website_url, { waitUntil: 'networkidle2', timeout: 20000 })
+    await sleep(1000)
+    const shot = await page.screenshot({ type: 'jpeg', quality: 80 })
+    screenshotBuffer = Buffer.from(shot)
+    screenshotBase64 = screenshotBuffer.toString('base64')
+    await page.close()
+  } catch (e) { log('Phase 2', `Screenshot mislukt: ${e}`) }
 
-      let screenshotBase64 = ''
-      let screenshotBuffer: Buffer | null = null
-      try {
-        const page = await browser.newPage()
-        await page.setViewport({ width: 1280, height: 900 })
-        await page.goto(lead.website_url, { waitUntil: 'networkidle2', timeout: 20000 })
-        await sleep(1000)
-        const shot = await page.screenshot({ type: 'jpeg', quality: 80 })
-        screenshotBuffer = Buffer.from(shot)
-        screenshotBase64 = screenshotBuffer.toString('base64')
-        await page.close()
-      } catch (e) { log('Phase 2', `Screenshot mislukt: ${e}`) }
+  let screenshotUrl = null
+  if (screenshotBuffer) {
+    const fn = `${lead.id}-${Date.now()}.jpg`
+    await supabase.storage.from('screenshots').upload(fn, screenshotBuffer, { contentType: 'image/jpeg', upsert: true })
+    screenshotUrl = supabase.storage.from('screenshots').getPublicUrl(fn).data.publicUrl
+  }
 
-      let screenshotUrl = null
-      if (screenshotBuffer) {
-        const fn = `${lead.id}-${Date.now()}.jpg`
-        await supabase.storage.from('screenshots').upload(fn, screenshotBuffer, { contentType: 'image/jpeg', upsert: true })
-        screenshotUrl = supabase.storage.from('screenshots').getPublicUrl(fn).data.publicUrl
-      }
-
-      try {
-        const msgContent: any[] = []
-        if (screenshotBase64) {
-          msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 } })
-        }
-        msgContent.push({ type: 'text', text: `Bedrijf: ${lead.company_name} (${lead.niche})\nWebsite: ${lead.website_url}
+  const msgContent: any[] = []
+  if (screenshotBase64) {
+    msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 } })
+  }
+  msgContent.push({ type: 'text', text: `Bedrijf: ${lead.company_name} (${lead.niche})\nWebsite: ${lead.website_url}
 
 Beoordeel deze website STRENG als potentiële klant voor een webdesign bureau. Wees kritisch — kwalificeer ALLEEN als de website meerdere serieuze problemen heeft die een redesign zinvol maken.
 
@@ -234,24 +314,48 @@ KWALIFICEER (score 6-10) ALLEEN als de website meerdere van deze problemen heeft
 Score 1-10 waarbij 10 = volledig onbruikbare website.
 Kwalificeer ALLEEN als score >= 7. Bij twijfel: disqualificeer.
 
-Antwoord ALLEEN in JSON (geen markdown): {"qualified":true,"score":8,"reason":"Korte uitleg in het Nederlands waarom wel/niet"}` })
+Als de website niet geladen kon worden of je geen screenshot hebt: geef score 5, qualified false.
+Je MOET altijd exact dit JSON-formaat teruggeven, nooit tekst of uitleg erbuiten:
+{"qualified":true,"score":8,"reason":"Korte uitleg in het Nederlands waarom wel/niet"}` })
 
-        const response = await callClaude({
-          model: 'claude-sonnet-4-6', max_tokens: 400,
-          messages: [{ role: 'user', content: msgContent }],
-        })
-        const text = response.content[0].type === 'text' ? response.content[0].text : ''
-        const result = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim())
+  const response = await callClaude({
+    max_tokens: 400,
+    messages: [{ role: 'user', content: msgContent }],
+  })
+  const textBlock = response.content?.find((b: any) => b.type === 'text')
+  if (!textBlock) throw new Error(`Geen text in response: ${JSON.stringify(response).slice(0, 200)}`)
+  const text = textBlock.text
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
+  const result = JSON.parse(jsonMatch[0])
 
-        await supabase.from('leads').update({
-          screenshot_url: screenshotUrl,
-          status: result.qualified ? 'qualified' : 'disqualified',
-          qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
-          email, updated_at: new Date().toISOString(),
-        }).eq('id', lead.id)
+  await supabase.from('leads').update({
+    screenshot_url: screenshotUrl,
+    status: result.qualified ? 'qualified' : 'disqualified',
+    qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
+    email, updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
 
-        if (result.qualified) qualified++
-        log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10)`)
+  log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10)`)
+  return result.qualified
+}
+
+async function phase2(runId: string) {
+  log('Phase 2', 'Email scrapen + kwalificeren')
+  const { data: leads } = await supabase.from('leads').select('*')
+    .in('status', ['scraped', 'no_email']).not('website_url', 'is', null)
+
+  if (!leads?.length) { log('Phase 2', 'Geen leads'); return }
+  log('Phase 2', `${leads.length} leads`)
+
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  let qualified = 0
+
+  try {
+    for (const lead of leads) {
+      try {
+        const q = await phase2SingleLead(lead, browser)
+        if (q) qualified++
       } catch (e) {
         log('Phase 2', `Claude fout: ${e}`)
         await supabase.from('leads').update({ status: 'error', qualify_reason: String(e) }).eq('id', lead.id)
@@ -264,6 +368,41 @@ Antwoord ALLEEN in JSON (geen markdown): {"qualified":true,"score":8,"reason":"K
 }
 
 // ─── Phase 3: HTML redesign ───────────────────────────────────────────────────
+async function fetchBrandColors(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return ''
+    const html = await res.text()
+    // Extract colors from <style> tags and inline styles
+    const styleBlocks = (html.match(/<style[\s\S]*?<\/style>/gi) ?? []).join(' ')
+    const inlineStyles = (html.match(/style="[^"]*"/gi) ?? []).join(' ')
+    const combined = styleBlocks + ' ' + inlineStyles
+    // Find all hex colors
+    const hexColors = (combined.match(/#[0-9a-fA-F]{6}\b/g) ?? [])
+    const counts: Record<string, number> = {}
+    for (const c of hexColors) {
+      const normalized = c.toLowerCase()
+      counts[normalized] = (counts[normalized] ?? 0) + 1
+    }
+    // Filter out near-white and near-black, sort by frequency
+    const meaningful = Object.entries(counts)
+      .filter(([c]) => {
+        const r = parseInt(c.slice(1, 3), 16)
+        const g = parseInt(c.slice(3, 5), 16)
+        const b = parseInt(c.slice(5, 7), 16)
+        const brightness = (r + g + b) / 3
+        return brightness > 25 && brightness < 230
+      })
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([c]) => c)
+    return meaningful.join(', ')
+  } catch { return '' }
+}
+
 async function fetchWebsiteText(url: string): Promise<string> {
   try {
     const res = await fetch(url, {
@@ -291,18 +430,29 @@ async function phase3(runId: string) {
   log('Phase 3', 'HTML redesigns genereren')
   const { data: leads } = await supabase.from('leads').select('*').eq('status', 'qualified')
   if (!leads?.length) { log('Phase 3', 'Geen gekwalificeerde leads'); return }
+  for (const lead of leads) await phase3SingleLead(lead)
+}
 
-  const system = `You are a senior web designer at a premium Dutch design agency. You build beautiful, complete, conversion-focused websites for local businesses.
+const phase3System = () => `You are a senior web designer at a premium Dutch design agency. You build beautiful, complete, conversion-focused websites for local businesses.
 
 ${loadSkill('taste-skill.md')}
 
 ${loadSkill('redesign-skill.md')}`
 
-  for (const lead of leads) {
+async function phase3SingleLead(lead: any) {
     log('Phase 3', `Genereren: ${lead.company_name}`)
     try {
-      const websiteText = await fetchWebsiteText(lead.website_url)
-      log('Phase 3', `Website content: ${websiteText.length} chars`)
+      const [websiteText, brandColors] = await Promise.all([
+        fetchWebsiteText(lead.website_url),
+        fetchBrandColors(lead.website_url),
+      ])
+      log('Phase 3', `Website content: ${websiteText.length} chars, brand colors: ${brandColors || 'none found'}`)
+
+      const colorInstruction = brandColors
+        ? `- Brand colors extracted from their existing site: ${brandColors}
+- Use THESE colors as the primary palette — pick the most prominent one as the main accent, derive secondary/dark tones from the same family
+- This is a redesign, not a rebrand — preserve their color identity`
+        : `- Choose a strong, professional accent color appropriate for "${lead.niche}" in the Netherlands`
 
       const prompt = `Create a complete, professional long-form single-page website. Return ONLY valid HTML starting with <!DOCTYPE html>.
 
@@ -317,54 +467,53 @@ BUSINESS:
 
 DESIGN:
 - White background (#FFFFFF), clean and modern
-- Google Font: Inter (via @import in <style>)
-- Primary accent: bold industry-appropriate color (for plumber/installer: #E8580A orange works well)
+- Google Font: pick the most fitting font for the niche (Inter for trades/technical, Playfair Display for luxury/beauty/wellness, Poppins for creative/young, Raleway for fashion/style)
+${colorInstruction}
 - Real Unsplash photos — format: https://images.unsplash.com/photo-{ID}?auto=format&fit=crop&w=1200&q=80
-  Use relevant IDs for "${lead.niche}" — plumber examples: 1621905251189-08b45d6a269e, 1558618666-fcd25c85cd64, 1581578731548-c64695cc6952, 1504328345606-18bbc8c9d7d1
+  Choose 6–8 DIFFERENT photo IDs that are genuinely relevant to "${lead.niche}" — show the actual work, environment, or results
+  Do NOT reuse the same ID more than once. Do NOT use generic office/business stock photos unless the niche calls for it.
 - All CSS in <style> tag only
 - No external dependencies except Google Fonts + Unsplash
 
-REQUIRED SECTIONS (in order):
-1. EMERGENCY BANNER — thin bar at very top, accent background, "24/7 Bereikbaar — Bel direct: [phone]", close button optional
-2. STICKY HEADER — logo left, nav center (Home, Diensten, Over ons, Reviews, Contact), phone CTA button right
-3. HERO — large split layout, bold headline + subheadline, two CTAs: "Bel Nu [phone]" + "Gratis Offerte", Unsplash background/image, Google rating badge
-4. SERVICES — 4–6 service cards with SVG icon, title, 2-line description specific to their niche
-5. HOW IT WORKS — 3 steps with numbered icons: "1. Bel ons" → "2. We komen langs" → "3. Probleem opgelost", each with short description
-6. TRUST STATS — 4 large numbers: Google rating, number of reviews, response time (e.g. "< 60 min"), years active
-7. ABOUT — 2-column: left side company story paragraph (based on original content), right side Unsplash image + a small detail list (KVK area, service area, etc.)
-8. REVIEWS — 3 customer review cards, generate realistic Dutch reviews based on the niche and Google rating (${lead.google_rating ?? '4.8'} stars), include first name + city
-9. GALLERY — 3-image grid using different Unsplash photos relevant to the work/niche
-10. FAQ — 4 questions and answers in accordion style (CSS only, no JS), questions specific to "${lead.niche}" in Dutch
-11. CONTACT — left: address, phone, email, working hours. Right: form with name, phone, email, message, submit button
-12. FOOTER — logo, short tagline, address, phone, email, © 2025 ${lead.company_name}
+LAYOUT PRINCIPLE — design sections that make sense for "${lead.niche}":
+- Emergency trades (loodgieter, elektricien, slotenmaker, cv-installateur, dakdekker): Lead with an urgency banner + strong "Bel ons nu" hero. Include: services, how-it-works steps, trust stats (response time, years active, rating), reviews, FAQ, contact
+- Beauty & wellness (kapper, barber, schoonheidsspecialist, make-up artist, salon, nagels): No urgency banner. Elegant full-width hero with atmosphere photo. Include: treatments/diensten, portfolio gallery (large image grid), about/team, reviews, online booking CTA, contact
+- Restaurant & food: Hero with beautiful food/ambiance photo. Include: menu highlights, about the chef/story, gallery, reviews, reservations form, contact
+- Retail & shop: Product hero. Include: featured products/categories, USPs, about the store, reviews, contact
+- Professional services (accountant, advocaat, notaris, makelaar): Clean professional hero. Include: services, about/team with photos, results/cases, reviews, contact
+- Fitness & sport (sportschool, personal trainer, yoga): Action hero. Include: programs/classes, schedule or timetable, trainer bio, results/testimonials, pricing, contact
+- Adapt freely — the layout should feel native to the industry. A barbershop should feel like a barbershop website, not a plumber site with different colors.
 
-EXTRAS:
-- Floating WhatsApp button bottom-left: green circle with WhatsApp SVG icon, links to wa.me/31[phone without 0]
-- Fixed "Concept door Graphic Vision" badge bottom-right, small pill in accent color
+ALWAYS INCLUDE:
+- Sticky header (logo left, nav, CTA button right)
+- Hero section (adapt style to niche)
+- Reviews section (3 cards, realistic Dutch reviews, ${lead.google_rating ?? '4.8'} ⭐)
+- Contact section (address, phone, email + form)
+- Footer (logo, short tagline, address, phone, © 2025 ${lead.company_name})
+- Floating WhatsApp button bottom-left (green, wa.me/31...)
+- Fixed "Concept door Graphic Vision" badge bottom-right (small pill, accent color)
 
 RULES:
 - All copy in Dutch
-- Use REAL phone number from original content — if not found use a placeholder like "020-XXXXXXX"
+- Use REAL phone number from original content — if not found use placeholder "020-XXXXXXX"
 - Use REAL address/city from original content
 - NO lorem ipsum
-- Google rating ${lead.google_rating ?? 'N/A'} ⭐ prominently in hero and trust stats
-- Keep CSS efficient — reuse classes, no redundant rules
+- Google rating ${lead.google_rating ?? 'N/A'} ⭐ prominently displayed
+- Keep CSS efficient — reuse classes
 - Complete the ENTIRE page — every section, closing </body></html>
 
 OUTPUT QUALITY:
-- Write every section with FULL, detailed content — no placeholders, no shortened versions
-- Each section must feel complete and real, as if a copywriter wrote it
-- Services section: write 2-3 real sentences per card, not just a title
-- FAQ: write complete question + full answer paragraph (3-5 sentences each)
-- About section: write a proper 3-4 sentence company story paragraph
-- Reviews: write realistic, detailed Dutch reviews (3-4 sentences each), not just "Goede service!"
-- The total HTML output should be 700+ lines — a full, long-form landing page`
+- Every section: full, detailed copy — no placeholders, no shortened versions
+- Services/treatments: 2–3 real sentences per card
+- FAQ (if included): complete question + full answer paragraph
+- About: proper 3–4 sentence story
+- Reviews: realistic, detailed Dutch reviews (3–4 sentences), not just "Goede service!"
+- Total HTML: 700+ lines`
 
-      const htmlModel = process.env.HTML_MODEL ?? 'claude-sonnet-4-6'
-      const response = await callClaude({
-        model: htmlModel, max_tokens: 32000, system,
+      const htmlModel = process.env.HTML_MODEL ?? 'claude-opus-4-6'
+      const response = await callKieStreaming({
+        model: htmlModel, max_tokens: 32000, system: phase3System(),
         messages: [{ role: 'user', content: prompt }],
-        extendedOutput: true,
       })
 
       const text = response.content[0].type === 'text' ? response.content[0].text : ''
@@ -380,11 +529,23 @@ OUTPUT QUALITY:
       log('Phase 3', `Fout: ${e}`)
       await supabase.from('leads').update({ status: 'error', qualify_reason: `Redesign: ${e}` }).eq('id', lead.id)
     }
-  }
 }
 
 // ─── Phase 4: Vercel deploy ───────────────────────────────────────────────────
 async function deployToVercel(name: string, html: string): Promise<string> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await deployToVercelOnce(name, html)
+    } catch (e) {
+      if (attempt === 3) throw e
+      log('Retry', `Vercel deploy attempt ${attempt} mislukt: ${e} — wacht 15s`)
+      await sleep(15_000)
+    }
+  }
+  throw new Error('deployToVercel: alle pogingen mislukt')
+}
+
+async function deployToVercelOnce(name: string, html: string): Promise<string> {
   const token = process.env.VERCEL_API_TOKEN!
   const teamId = process.env.VERCEL_TEAM_ID
   const slug = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 40)
@@ -417,6 +578,36 @@ async function deployToVercel(name: string, html: string): Promise<string> {
   throw new Error('Vercel deploy timeout')
 }
 
+async function phase4SingleLead(lead: any, browser: any): Promise<void> {
+  log('Phase 4', `Deploy: ${lead.company_name}`)
+  const { data: blob } = await supabase.storage.from('previews').download(`${lead.id}-preview.html`)
+  if (!blob) throw new Error('HTML niet gevonden in storage')
+  const html = await blob.text()
+
+  const previewUrl = await deployToVercel(lead.company_name!, html)
+  log('Phase 4', `Live: ${previewUrl}`)
+
+  let previewScreenshotUrl = null
+  try {
+    const page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 900 })
+    await page.goto(previewUrl, { waitUntil: 'networkidle2', timeout: 20000 })
+    await sleep(1500)
+    const shot = await page.screenshot({ type: 'jpeg', quality: 85 })
+    await page.close()
+    const buf = Buffer.from(shot)
+    const fn = `${lead.id}-preview-screenshot.jpg`
+    await supabase.storage.from('previews').upload(fn, buf, { contentType: 'image/jpeg', upsert: true })
+    previewScreenshotUrl = supabase.storage.from('previews').getPublicUrl(fn).data.publicUrl
+  } catch (e) { log('Phase 4', `Preview screenshot mislukt: ${e}`) }
+
+  await supabase.from('leads').update({
+    status: 'deployed', preview_url: previewUrl,
+    preview_screenshot_url: previewScreenshotUrl,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+}
+
 async function phase4(runId: string) {
   log('Phase 4', 'Deployen naar Vercel')
   const { data: leads } = await supabase.from('leads').select('*').eq('status', 'redesigned')
@@ -427,35 +618,8 @@ async function phase4(runId: string) {
 
   try {
     for (const lead of leads) {
-      log('Phase 4', `Deploy: ${lead.company_name}`)
       try {
-        const { data: blob } = await supabase.storage.from('previews').download(`${lead.id}-preview.html`)
-        if (!blob) throw new Error('HTML niet gevonden')
-        const html = await blob.text()
-
-        const previewUrl = await deployToVercel(lead.company_name!, html)
-        log('Phase 4', `Live: ${previewUrl}`)
-
-        // Preview screenshot
-        let previewScreenshotUrl = null
-        try {
-          const page = await browser.newPage()
-          await page.setViewport({ width: 1280, height: 900 })
-          await page.goto(previewUrl, { waitUntil: 'networkidle2', timeout: 20000 })
-          await sleep(1500)
-          const shot = await page.screenshot({ type: 'jpeg', quality: 85 })
-          await page.close()
-          const buf = Buffer.from(shot)
-          const fn = `${lead.id}-preview-screenshot.jpg`
-          await supabase.storage.from('previews').upload(fn, buf, { contentType: 'image/jpeg', upsert: true })
-          previewScreenshotUrl = supabase.storage.from('previews').getPublicUrl(fn).data.publicUrl
-        } catch (e) { log('Phase 4', `Preview screenshot mislukt: ${e}`) }
-
-        await supabase.from('leads').update({
-          status: 'deployed', preview_url: previewUrl,
-          preview_screenshot_url: previewScreenshotUrl,
-          updated_at: new Date().toISOString(),
-        }).eq('id', lead.id)
+        await phase4SingleLead(lead, browser)
         deployed++
       } catch (e) {
         log('Phase 4', `Mislukt: ${e}`)
@@ -476,6 +640,46 @@ app.get('/logs', (req, res) => {
   res.json({ logs: logBuffer.slice(since), total: logBuffer.length })
 })
 
+app.post('/run/phase1', async (req, res) => {
+  const { niche, city, maxLeads = 10 } = req.body
+  if (!niche || !city) return res.status(400).json({ error: 'niche en city verplicht' })
+  const { data: run } = await supabase.from('pipeline_runs')
+    .insert({ niche, city, status: 'running' }).select().single()
+  res.json({ success: true, message: 'Phase 1 gestart', runId: run!.id })
+  phase1(run!.id, niche, city, maxLeads)
+    .then(() => supabase.from('pipeline_runs').update({ status: 'completed' }).eq('id', run!.id))
+    .catch(e => log('Phase 1', `Fout: ${e}`))
+})
+
+app.post('/run/phase2-single/:id', async (req, res) => {
+  const { id } = req.params
+  res.json({ success: true, message: 'Phase 2 single gestart' })
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) { log('Phase 2', `Lead ${id} niet gevonden`); return }
+  await supabase.from('leads').update({ status: 'scraped' }).eq('id', id)
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  try {
+    await phase2SingleLead({ ...lead, status: 'scraped' }, browser)
+  } catch (e) {
+    log('Phase 2', `Fout: ${e}`)
+    await supabase.from('leads').update({ status: 'error', qualify_reason: String(e) }).eq('id', id)
+  } finally { await browser.close() }
+})
+
+app.post('/run/phase4-single/:id', async (req, res) => {
+  const { id } = req.params
+  res.json({ success: true, message: 'Phase 4 single gestart' })
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) { log('Phase 4', `Lead ${id} niet gevonden`); return }
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  try {
+    await phase4SingleLead(lead, browser)
+  } catch (e) {
+    log('Phase 4', `Fout: ${e}`)
+    await supabase.from('leads').update({ status: 'error', qualify_reason: `Deploy: ${e}` }).eq('id', id)
+  } finally { await browser.close() }
+})
+
 app.post('/run/phase2', async (_, res) => {
   res.json({ success: true, message: 'Phase 2 gestart' })
   phase2('manual').catch(e => log('Phase 2', `Fout: ${e}`))
@@ -484,6 +688,15 @@ app.post('/run/phase2', async (_, res) => {
 app.post('/run/phase3', async (_, res) => {
   res.json({ success: true, message: 'Phase 3 gestart' })
   phase3('manual').catch(e => log('Phase 3', `Fout: ${e}`))
+})
+
+app.post('/run/phase3-single/:id', async (req, res) => {
+  const { id } = req.params
+  res.json({ success: true, message: 'Phase 3 single gestart' })
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) { log('Phase 3', `Lead ${id} niet gevonden`); return }
+  await supabase.from('leads').update({ status: 'qualified' }).eq('id', id)
+  phase3SingleLead(lead).catch(e => log('Phase 3', `Fout: ${e}`))
 })
 
 app.post('/run/phase4', async (_, res) => {
@@ -575,7 +788,6 @@ Eisen voor de e-mail:
 Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
 
     const response = await callClaude({
-      model: 'claude-sonnet-4-6',
       max_tokens: 700,
       messages: [{ role: 'user', content: prompt }],
     })
