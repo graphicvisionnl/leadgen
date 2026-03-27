@@ -43,6 +43,15 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: lead.status }),
     })
+    // Poll until status changes (max 3 min)
+    const start = Date.now()
+    while (Date.now() - start < 180_000) {
+      await new Promise(r => setTimeout(r, 3000))
+      onRefresh()
+      const res = await fetch(`/api/leads/${lead.id}`).catch(() => null)
+      const data = await res?.json().catch(() => null)
+      if (data?.status && data.status !== lead.status) break
+    }
     setAdvancing(null)
     onRefresh()
   }

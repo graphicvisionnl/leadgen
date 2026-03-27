@@ -48,11 +48,14 @@ async function callClaude(params: {
         signal: AbortSignal.timeout(60_000),
       })
       if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
-      return res.json()
+      const data = await res.json()
+      // kie.ai wraps errors in 200 responses with a code field
+      if (data.code && data.code !== 200) throw new Error(`kie.ai error: ${JSON.stringify(data)}`)
+      return data
     } catch (e) {
       if (attempt === 3) throw e
-      log('Retry', `callClaude attempt ${attempt} mislukt: ${e} — wacht 10s`)
-      await sleep(10_000)
+      log('Retry', `callClaude attempt ${attempt} mislukt: ${e} — wacht 15s`)
+      await sleep(15_000)
     }
   }
   throw new Error('callClaude: alle pogingen mislukt')
@@ -230,110 +233,76 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   return inserted?.length ?? 0
 }
 
-// ─── Phase 2: Email + screenshot + qualify ───────────────────────────────────
-async function scrapeEmail(url: string): Promise<string | null> {
+// ─── Phase 2: Email scrape + text-based qualify (no browser) ─────────────────
+async function scrapeEmailAndText(url: string): Promise<{ email: string | null; text: string }> {
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
-      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)', 'Accept-Language': 'nl,en;q=0.9' },
+      signal: AbortSignal.timeout(10000),
+      redirect: 'follow',
     })
-    if (!res.ok) return null
+    if (!res.ok) return { email: null, text: '' }
     const html = await res.text()
+
+    // Extract email
     const mailto = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
-    if (mailto) return mailto[1].toLowerCase()
-    const emails = (html.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
+    const emailsInPage = (html.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
       .filter(e => !e.includes('sentry') && !e.includes('example') && !e.includes('noreply') && !e.includes('@w3.org'))
-    if (emails.length) return emails[0].toLowerCase()
-    const contact = await fetch(`${new URL(url).origin}/contact`, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000),
-    }).catch(() => null)
-    if (contact?.ok) {
-      const ch = await contact.text()
-      const cm = ch.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
-      if (cm) return cm[1].toLowerCase()
-    }
-  } catch {}
-  return null
+    const email = mailto?.[1]?.toLowerCase() ?? emailsInPage[0]?.toLowerCase() ?? null
+
+    // Extract clean text
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 4000)
+
+    return { email, text }
+  } catch {
+    return { email: null, text: '' }
+  }
 }
 
-async function phase2SingleLead(lead: any, browser: any): Promise<boolean> {
+async function phase2SingleLead(lead: any): Promise<boolean> {
   log('Phase 2', lead.company_name)
-  let email = lead.email
-  if (!email) {
-    email = await scrapeEmail(lead.website_url)
-    if (email) await supabase.from('leads').update({ email }).eq('id', lead.id)
+
+  const { email: scrapedEmail, text: websiteText } = await scrapeEmailAndText(lead.website_url)
+  const email = lead.email ?? scrapedEmail
+  if (scrapedEmail && !lead.email) {
+    await supabase.from('leads').update({ email: scrapedEmail }).eq('id', lead.id)
   }
 
-  let screenshotBase64 = ''
-  let screenshotBuffer: Buffer | null = null
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 900 })
-    await page.goto(lead.website_url, { waitUntil: 'networkidle2', timeout: 20000 })
-    await sleep(1000)
-    const shot = await page.screenshot({ type: 'jpeg', quality: 80 })
-    screenshotBuffer = Buffer.from(shot)
-    screenshotBase64 = screenshotBuffer.toString('base64')
-    await page.close()
-  } catch (e) { log('Phase 2', `Screenshot mislukt: ${e}`) }
+  const prompt = `Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city})
+Website: ${lead.website_url}
+Google rating: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} reviews)
 
-  let screenshotUrl = null
-  if (screenshotBuffer) {
-    const fn = `${lead.id}-${Date.now()}.jpg`
-    await supabase.storage.from('screenshots').upload(fn, screenshotBuffer, { contentType: 'image/jpeg', upsert: true })
-    screenshotUrl = supabase.storage.from('screenshots').getPublicUrl(fn).data.publicUrl
-  }
+Website tekst:
+${websiteText || '(niet beschikbaar)'}
 
-  const msgContent: any[] = []
-  if (screenshotBase64) {
-    msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 } })
-  }
-  msgContent.push({ type: 'text', text: `Bedrijf: ${lead.company_name} (${lead.niche})\nWebsite: ${lead.website_url}
+Beoordeel deze website als potentiële klant voor een webdesign bureau.
+Kwalificeer als de website verouderd, amateuristisch of slecht converterende is.
+Disqualificeer als de website al modern en professioneel is.
 
-Beoordeel deze website STRENG als potentiële klant voor een webdesign bureau. Wees kritisch — kwalificeer ALLEEN als de website meerdere serieuze problemen heeft die een redesign zinvol maken.
-
-DISQUALIFICEER (score 1-5) als de website:
-- Al een modern, professioneel ontwerp heeft (na 2019)
-- Duidelijke call-to-actions heeft (telefoon, formulier, knop boven de vouw)
-- Goede navigatie en overzichtelijke structuur heeft
-- Beoordelingen, reviews of social proof toont
-- Een contactformulier of offerte aanvraag heeft
-- Duidelijke branding en consistent design heeft
-- Inhoudelijk compleet is (diensten, over ons, contact goed beschreven)
-
-KWALIFICEER (score 6-10) ALLEEN als de website meerdere van deze problemen heeft:
-- Verouderd of amateuristisch design (pre-2018 uitstraling, slechte fonts, lelijke kleuren)
-- Geen duidelijke call-to-action boven de vouw
-- Slechte of verwarrende navigatie
-- Geen reviews of vertrouwenssignalen zichtbaar
-- Rommelige of lege layout
-- Geen contactformulier of moeilijk te vinden
-- Generiek WordPress-template zonder eigen uitstraling
-- Nauwelijks inhoud of beschrijving van diensten
-
-Score 1-10 waarbij 10 = volledig onbruikbare website.
-Kwalificeer ALLEEN als score >= 7. Bij twijfel: disqualificeer.
-
-Als de website niet geladen kon worden of je geen screenshot hebt: geef score 5, qualified false.
-Je MOET altijd exact dit JSON-formaat teruggeven, nooit tekst of uitleg erbuiten:
-{"qualified":true,"score":8,"reason":"Korte uitleg in het Nederlands waarom wel/niet"}` })
+Antwoord ALLEEN met dit JSON (geen markdown, geen uitleg):
+{"qualified":true,"score":7,"reason":"Korte reden in het Nederlands"}`
 
   const response = await callClaude({
-    max_tokens: 400,
-    messages: [{ role: 'user', content: msgContent }],
+    max_tokens: 200,
+    messages: [{ role: 'user', content: prompt }],
   })
   const textBlock = response.content?.find((b: any) => b.type === 'text')
   if (!textBlock) throw new Error(`Geen text in response: ${JSON.stringify(response).slice(0, 200)}`)
-  const text = textBlock.text
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
+  const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
   const result = JSON.parse(jsonMatch[0])
 
   await supabase.from('leads').update({
-    screenshot_url: screenshotUrl,
     status: result.qualified ? 'qualified' : 'disqualified',
     qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
-    email, updated_at: new Date().toISOString(),
+    email,
+    updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
   log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10)`)
@@ -348,21 +317,17 @@ async function phase2(runId: string) {
   if (!leads?.length) { log('Phase 2', 'Geen leads'); return }
   log('Phase 2', `${leads.length} leads`)
 
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   let qualified = 0
-
-  try {
-    for (const lead of leads) {
-      try {
-        const q = await phase2SingleLead(lead, browser)
-        if (q) qualified++
-      } catch (e) {
-        log('Phase 2', `Claude fout: ${e}`)
-        await supabase.from('leads').update({ status: 'error', qualify_reason: String(e) }).eq('id', lead.id)
-      }
-      await sleep(1500)
+  for (const lead of leads) {
+    try {
+      const q = await phase2SingleLead(lead)
+      if (q) qualified++
+    } catch (e) {
+      log('Phase 2', `Fout: ${e}`)
+      await supabase.from('leads').update({ status: 'error', qualify_reason: String(e) }).eq('id', lead.id)
     }
-  } finally { await browser.close() }
+    await sleep(500)
+  }
 
   await supabase.from('pipeline_runs').update({ qualified_count: qualified }).eq('id', runId)
 }
@@ -657,13 +622,12 @@ app.post('/run/phase2-single/:id', async (req, res) => {
   const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
   if (!lead) { log('Phase 2', `Lead ${id} niet gevonden`); return }
   await supabase.from('leads').update({ status: 'scraped' }).eq('id', id)
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   try {
-    await phase2SingleLead({ ...lead, status: 'scraped' }, browser)
+    await phase2SingleLead({ ...lead, status: 'scraped' })
   } catch (e) {
     log('Phase 2', `Fout: ${e}`)
     await supabase.from('leads').update({ status: 'error', qualify_reason: String(e) }).eq('id', id)
-  } finally { await browser.close() }
+  }
 })
 
 app.post('/run/phase4-single/:id', async (req, res) => {
