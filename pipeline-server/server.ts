@@ -1026,9 +1026,9 @@ async function checkReplies(): Promise<number> {
     try {
       // Search for unseen messages
       const uids = await client.search({ seen: false })
-      if (!uids.length) return 0
+      if (!uids || !Array.isArray(uids) || uids.length === 0) return 0
 
-      for await (const msg of client.fetch(uids, { envelope: true, bodyStructure: true, bodyParts: ['1', 'TEXT'] })) {
+      for await (const msg of client.fetch(uids as number[], { envelope: true, bodyStructure: true, bodyParts: ['1', 'TEXT'] })) {
         const fromEmail = msg.envelope?.from?.[0]?.address?.toLowerCase()
         if (!fromEmail) continue
 
