@@ -779,12 +779,22 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
 
   try {
     const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
+
+    // Specific issues for Email 1 (max 2, no links)
     const issues: string[] = []
     if (breakdown.outdated_feel) issues.push('de website heeft een verouderde uitstraling')
-    if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action zichtbaar')
+    if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action boven de vouw')
     if (!breakdown.mobile_friendly) issues.push('de mobiele versie voelt verouderd aan')
     if (!breakdown.email_found && !lead.email) issues.push('contactgegevens zijn moeilijk te vinden')
-    const issueText = issues.slice(0, 2).join(' en ')
+    const issueText = issues.slice(0, 2).join(' en ') || 'verouderde website'
+
+    // What was improved — for Email 2
+    const improvements: string[] = []
+    if (breakdown.outdated_feel) improvements.push('moderne layout en uitstraling')
+    if (!breakdown.has_cta) improvements.push('duidelijke call-to-action toegevoegd')
+    if (!breakdown.mobile_friendly) improvements.push('volledig mobiel geoptimaliseerd')
+    if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
+    const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
 
     const shortName = (lead.company_name ?? '')
       .split(/[|&·]/)[0].trim()
@@ -795,20 +805,44 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
-Website issues: ${issueText || 'verouderde website'}
-Preview URL: ${lead.preview_url ?? '(nog niet beschikbaar)'}
+Wat er mis is: ${issueText}
+Wat verbeterd is in het redesign: ${improvementText}
+Preview URL: ${lead.preview_url}
 
-STRATEGIE:
-- Email 1: GEEN preview link, GEEN button. Pure tekst. Max 5 zinnen. Wek nieuwsgierigheid. Benoem 1-2 specifieke issues. Eindig met: "Wil je zien hoe het er beter uit kan zien?"
-- Email 2: 3 dagen later. Onthul nu de preview link. "Ik heb alvast iets voor je gemaakt..." — zet preview URL op eigen regel met "→ "
-- Email 3: 7 dagen na email 2. Korte herinnering. "Nog even dit..." — noem preview URL nogmaals
-- Email 4: 14 dagen na email 3. Sluit het dossier. "Ik sluit het bestand..." — bied nog één keer de preview aan
+TIMING:
+- Email 1: Dag 0
+- Email 2: Dag 1 (volgende dag)
+- Email 3: Dag 3
+- Email 4: Dag 5–7
 
-Alle e-mails:
+STRATEGIE PER EMAIL:
+
+Email 1 — GEEN preview link, GEEN button, GEEN afbeeldingen. Pure tekst. Max 5 zinnen.
+- Benoem 1–2 van de volgende specifieke issues: ${issueText}
+- Wek nieuwsgierigheid zonder te veel te onthullen
+- Eindig met een curiosity-gebaseerde CTA, bijv. "Wil je zien hoe het er beter uit kan zien?"
+
+Email 2 — Onthul de preview. Noem CONCREET wat verbeterd is: ${improvementText}
+- Open met "Ik heb alvast iets voor je gemaakt..."
+- Zet de preview URL op een eigen regel, voorafgegaan door "→ "
+- Kort en persoonlijk, max 4 zinnen
+
+Email 3 — Korte follow-up herinnering
+- Open met "Nog even dit..."
+- Noem de preview URL nogmaals met "→ "
+- Max 3 zinnen
+
+Email 4 — Sluit het dossier
+- Open met "Ik sluit het bestand..."
+- Bied de preview nog één keer aan met "→ "
+- Vriendelijk en zonder druk, max 3 zinnen
+
+REGELS VOOR ALLE EMAILS:
 - Begin met "Goedendag," of "Hey ${shortName},"
 - Sluit af met "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
 - Geen bullet points, kort en persoonlijk
 - Alle tekst in het Nederlands
+- Email 1 bevat ABSOLUUT GEEN links of URLs
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
@@ -850,20 +884,29 @@ app.post('/generate-email-variants/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
 
   try {
+    const breakdown2: ScoreBreakdown = lead.score_breakdown ?? {}
+    const variantIssues: string[] = []
+    if (breakdown2.outdated_feel) variantIssues.push('verouderde uitstraling')
+    if (!breakdown2.has_cta) variantIssues.push('geen duidelijke call-to-action')
+    if (!breakdown2.mobile_friendly) variantIssues.push('slechte mobiele versie')
+    const variantIssueText = variantIssues.slice(0, 2).join(' en ') || 'verouderde website'
+
     const prompt = `Schrijf 3 varianten van een eerste verkoop-e-mail namens Ezra van Graphic Vision voor:
 
 Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city ?? ''})
+Specifieke website-issues: ${variantIssueText}
 
-Regels voor ALLE varianten:
-- GEEN preview link, GEEN button — pure tekst
-- Max 5 zinnen per e-mail
-- Eindig met: "Wil je zien hoe het er beter uit kan zien?"
+STRENGE REGELS VOOR ALLE VARIANTEN:
+- ABSOLUUT GEEN links, URLs, buttons of afbeeldingen
+- Max 5 zinnen
+- Benoem 1–2 van de bovenstaande specifieke issues
+- Eindig met een curiosity-gebaseerde CTA (geen "Wil je...?" herhalen — varieer de formulering)
 - Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
 - Alle tekst in het Nederlands
 
-Variant A: directe, zakelijke toon
-Variant B: vriendelijke, persoonlijke toon
-Variant C: urgentie/competitie-invalshoek
+Variant A: direct en zakelijk — to the point, geen smalltalk
+Variant B: persoonlijk en vriendelijk — voelt als een bericht van een bekende
+Variant C: competitie-invalshoek — wat lopen ze mis t.o.v. concurrenten in de branche
 
 Geef ALLEEN dit JSON terug:
 [
@@ -1130,7 +1173,7 @@ app.post('/send-email/:id', async (req, res) => {
     // Track sequence state
     const seqIndex: number = lead.email_sequence_index ?? 0
     const nextIndex = seqIndex + 1
-    const followupDelays: Record<number, number> = { 1: 3, 2: 7, 3: 14 }  // days after each email
+    const followupDelays: Record<number, number> = { 1: 1, 2: 3, 3: 6 }  // email2: +1d, email3: +3d, email4: +6d
     const followupDays = followupDelays[nextIndex]
     const next_followup_at = followupDays && nextIndex < 4
       ? new Date(Date.now() + followupDays * 24 * 60 * 60 * 1000).toISOString()
