@@ -4,7 +4,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json()
   const { phase, niche, city, maxLeads } = body
 
-  if (!['phase1', 'phase2', 'phase3', 'phase4'].includes(phase)) {
+  const validPhases = ['phase1', 'phase2', 'phase3', 'phase4', 'email-qualified']
+  if (!validPhases.includes(phase)) {
     return NextResponse.json({ error: 'Ongeldige phase' }, { status: 400 })
   }
 
@@ -14,10 +15,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Pipeline server niet geconfigureerd' }, { status: 500 })
   }
 
-  const res = await fetch(`${pipelineUrl}/run/${phase}`, {
+  const serverPath = phase === 'email-qualified' ? '/run/email-qualified' : `/run/${phase}`
+  const bodyPayload: Record<string, unknown> = {}
+  if (phase === 'phase1') { bodyPayload.niche = niche; bodyPayload.city = city; bodyPayload.maxLeads = maxLeads }
+  if (phase === 'email-qualified' && body.mode) bodyPayload.mode = body.mode
+
+  const res = await fetch(`${pipelineUrl}${serverPath}`, {
     method: 'POST',
     headers: { 'x-pipeline-secret': pipelineSecret, 'Content-Type': 'application/json' },
-    body: phase === 'phase1' ? JSON.stringify({ niche, city, maxLeads }) : undefined,
+    body: JSON.stringify(bodyPayload),
   }).catch(() => null)
 
   if (!res?.ok) return NextResponse.json({ error: 'Hetzner fout' }, { status: 502 })

@@ -134,8 +134,14 @@ export interface QualificationResult {
 }
 
 export interface Settings {
-  default_niche?: string
-  default_city?: string
+  auto_mode?: 'manual' | 'auto_draft' | 'auto_send'
+  cities_list?: string   // JSON array string
+  niches_list?: string   // JSON array string
+  city_rotation_index?: string
+  niche_rotation_index?: string
   max_leads?: string
   email_signature?: string
+  // Legacy fields kept for backwards compat
+  default_niche?: string
+  default_city?: string
 }

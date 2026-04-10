@@ -330,7 +330,7 @@ async function phase2SingleLead(lead: any): Promise<boolean> {
     await supabase.from('leads').update({ email: signals.email }).eq('id', lead.id)
   }
 
-  const prompt = `Je bent een webdesign bureau dat beoordeelt of een bedrijf een nieuwe website nodig heeft.
+  const prompt = `Je bent een webdesign bureau dat beoordeelt of een bedrijf baat zou hebben bij een nieuwe website.
 Je hebt GEEN internet toegang. De website tekst hieronder is al voor jou opgehaald. Bezoek de URL NIET.
 
 BEDRIJF: ${lead.company_name} (${lead.niche}, ${lead.city})
@@ -339,15 +339,18 @@ GOOGLE RATING: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} 
 OPGEHAALDE WEBSITE TEKST:
 ${signals.text || '(website niet bereikbaar — geen tekst beschikbaar)'}
 
-Beoordeel op basis van de tekst:
-- Kwalificeer als score >= 7 (website ziet er verouderd/amateuristisch uit, goede kans op herontwerp)
-- Als er geen tekst beschikbaar is: score 5, qualified false
-- mobile_friendly: schat in of de tekst hints geeft op een mobiele site (responsive layout, viewport meta, etc.)
-- has_cta: is er een duidelijke CTA aanwezig in de tekst (offerte, bel, contact, boek, etc.)?
-- outdated_feel: ziet de site er verouderd/amateuristisch uit op basis van de tekst?
+KWALIFICATIEREGELS — wees RUIMHARTIG, standaard is qualified=true:
+- qualified=true: bijna altijd, tenzij de website DUIDELIJK modern en professioneel is
+- qualified=false ALLEEN als: de website aantoonbaar modern/recent/professioneel oogt (veel tekst over features, clean layout, recente copyright, duidelijk een professioneel bureau gebouwd)
+- Een simpele of dunne website is qualified=true — ook al lijkt die redelijk
+- Geen tekst beschikbaar: qualified=true (we weten het niet, stuur toch)
+- heeft_geen_website (404/error): qualified=true
+- mobile_friendly: schat in of de tekst hints geeft op een moderne responsieve site
+- has_cta: is er een duidelijke CTA aanwezig (offerte, bel, contact, boek, etc.)?
+- outdated_feel: ziet de site er verouderd/amateuristisch uit?
 
 VERPLICHT formaat — alleen dit JSON, niets anders:
-{"qualified":false,"score":5,"reason":"één zin in het Nederlands","mobile_friendly":true,"has_cta":false,"outdated_feel":false}`
+{"qualified":true,"score":7,"reason":"één zin in het Nederlands","mobile_friendly":false,"has_cta":false,"outdated_feel":true}`
 
   const response = await callClaude({
     max_tokens: 300,
@@ -1143,7 +1146,8 @@ app.post('/run/phase4', async (_, res) => {
 })
 
 app.post('/run', async (req, res) => {
-  const { niche, city, maxLeads = 10 } = req.body
+  // mode: 'send' (default) = auto-send Email 1 | 'draft' = generate sequence but don't send
+  const { niche, city, maxLeads = 10, mode = 'send' } = req.body
   if (!niche || !city) return res.status(400).json({ error: 'niche en city verplicht' })
 
   const { data: run } = await supabase.from('pipeline_runs')
@@ -1151,14 +1155,14 @@ app.post('/run', async (req, res) => {
 
   res.json({ success: true, runId: run!.id })
 
-  // New flow: scrape → qualify → generate email sequence → send Email 1
+  // New flow: scrape → qualify → generate email sequence → send Email 1 (or just draft)
   // Redesign only happens AFTER a lead replies (triggered by /on-reply/:id)
   ;(async () => {
     try {
       await phase1(run!.id, niche, city, maxLeads)
       await phase2(run!.id)
 
-      // Generate email sequence + send Email 1 for all qualified leads with email
+      // Generate email sequence for all qualified leads with email
       const { data: qualifiedLeads } = await supabase
         .from('leads').select('*').eq('status', 'qualified').not('email', 'is', null)
         .eq('pipeline_run_id', run!.id)
@@ -1166,18 +1170,21 @@ app.post('/run', async (req, res) => {
       let emailed = 0
       for (const lead of qualifiedLeads ?? []) {
         try {
-          // Generate the 4-email sequence (Email 1 is text-only, no redesign needed)
           await generateEmailSequenceForLead(lead)
-          // Send Email 1 automatically
-          await sendEmailForLead(lead, 1)
-          emailed++
-          await sleep(30_000) // 30s between sends for deliverability
+          if (mode === 'send') {
+            await sendEmailForLead(lead, 1)
+            emailed++
+            await sleep(30_000) // 30s between sends for deliverability
+          }
         } catch (e) {
           log('Pipeline', `Email 1 fout voor ${lead.company_name}: ${e}`)
         }
       }
 
-      log('Pipeline', `Run ${run!.id} voltooid — ${emailed} emails verstuurd, wacht op reacties`)
+      const summary = mode === 'send'
+        ? `${emailed} emails verstuurd, wacht op reacties`
+        : `${qualifiedLeads?.length ?? 0} sequenties gegenereerd (draft mode — niet verstuurd)`
+      log('Pipeline', `Run ${run!.id} voltooid — ${summary}`)
       await supabase.from('pipeline_runs').update({
         status: 'completed', completed_at: new Date().toISOString(),
       }).eq('id', run!.id)
@@ -1185,6 +1192,36 @@ app.post('/run', async (req, res) => {
       log('Pipeline', `Run ${run!.id} mislukt: ${e}`)
       await supabase.from('pipeline_runs').update({ status: 'failed', error: String(e) }).eq('id', run!.id)
     }
+  })()
+})
+
+// ─── Bulk: generate sequences + optionally send Email 1 for existing qualified leads ──
+app.post('/run/email-qualified', async (req, res) => {
+  const { mode = 'send' } = req.body
+  res.json({ success: true })
+
+  ;(async () => {
+    const { data: leads } = await supabase
+      .from('leads').select('*').eq('status', 'qualified').not('email', 'is', null)
+      .is('email1_sent_at', null) // Only leads that haven't been emailed yet
+
+    let count = 0
+    for (const lead of leads ?? []) {
+      try {
+        if (!lead.email1_subject) await generateEmailSequenceForLead(lead)
+        const fresh = await supabase.from('leads').select('*').eq('id', lead.id).single()
+        if (mode === 'send') {
+          await sendEmailForLead(fresh.data ?? lead, 1)
+          count++
+          await sleep(30_000)
+        } else {
+          count++
+        }
+      } catch (e) {
+        log('Email-qualified', `Fout voor ${lead.company_name}: ${e}`)
+      }
+    }
+    log('Email-qualified', `Klaar — ${count} leads verwerkt (mode: ${mode})`)
   })()
 })
 

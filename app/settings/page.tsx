@@ -1,19 +1,107 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, KeyboardEvent } from 'react'
+
+type AutoMode = 'manual' | 'auto_draft' | 'auto_send'
 
 interface Settings {
-  default_niche: string
-  default_city: string
+  auto_mode: AutoMode
+  cities_list: string[]
+  niches_list: string[]
   max_leads: string
   email_signature: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  default_niche: '',
-  default_city: '',
+  auto_mode: 'manual',
+  cities_list: [],
+  niches_list: [],
   max_leads: '30',
   email_signature: 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl',
+}
+
+const MODE_OPTIONS: { value: AutoMode; label: string; desc: string; color: string }[] = [
+  {
+    value: 'manual',
+    label: 'Handmatig',
+    desc: 'Geen automatische scraping. Alles doe je zelf via de pipeline pagina.',
+    color: 'border-white/20 text-white',
+  },
+  {
+    value: 'auto_draft',
+    label: 'Auto + Concept',
+    desc: 'Dagelijkse scraping + kwalificatie + e-mailsequentie gegenereerd. Email 1 staat klaar als concept — jij verstuurt.',
+    color: 'border-yellow-500/40 text-yellow-400',
+  },
+  {
+    value: 'auto_send',
+    label: 'Auto + Verstuur',
+    desc: 'Volledig automatisch: scrapen → kwalificeren → Email 1 direct versturen. Geen tussenkomst nodig.',
+    color: 'border-green-500/40 text-green-400',
+  },
+]
+
+function TagInput({
+  label,
+  description,
+  placeholder,
+  tags,
+  onChange,
+}: {
+  label: string
+  description: string
+  placeholder: string
+  tags: string[]
+  onChange: (tags: string[]) => void
+}) {
+  const [input, setInput] = useState('')
+
+  function add() {
+    const val = input.trim()
+    if (val && !tags.includes(val)) onChange([...tags, val])
+    setInput('')
+  }
+
+  function onKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add() }
+    if (e.key === 'Backspace' && !input && tags.length > 0) onChange(tags.slice(0, -1))
+  }
+
+  function remove(tag: string) {
+    onChange(tags.filter(t => t !== tag))
+  }
+
+  return (
+    <div className="p-5">
+      <label className="block text-sm font-medium mb-1">{label}</label>
+      <p className="text-white/40 text-xs mb-3">{description}</p>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {tags.map(tag => (
+          <span key={tag} className="flex items-center gap-1 bg-white/8 border border-subtle rounded-full px-2.5 py-0.5 text-xs text-white/80">
+            {tag}
+            <button onClick={() => remove(tag)} className="text-white/30 hover:text-white/70 ml-0.5 leading-none">×</button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKey}
+          onBlur={add}
+          placeholder={placeholder}
+          className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 flex-1 max-w-xs"
+        />
+        <button
+          onClick={add}
+          className="px-3 py-2 bg-white/8 border border-subtle rounded-lg text-sm text-white/60 hover:text-white transition-colors"
+        >
+          + Toevoegen
+        </button>
+      </div>
+    </div>
+  )
 }
 
 export default function SettingsPage() {
@@ -23,9 +111,22 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetch('/api/settings')
-      .then((r) => r.json())
-      .then((data) => setSettings({ ...DEFAULT_SETTINGS, ...data }))
+      .then(r => r.json())
+      .then(data => {
+        setSettings({
+          auto_mode: (data.auto_mode as AutoMode) ?? 'manual',
+          cities_list: parseJsonArray(data.cities_list),
+          niches_list: parseJsonArray(data.niches_list),
+          max_leads: data.max_leads ?? '30',
+          email_signature: data.email_signature ?? DEFAULT_SETTINGS.email_signature,
+        })
+      })
   }, [])
+
+  function parseJsonArray(val: string | undefined): string[] {
+    if (!val) return []
+    try { return JSON.parse(val) } catch { return [] }
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -34,7 +135,13 @@ export default function SettingsPage() {
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
+        body: JSON.stringify({
+          auto_mode: settings.auto_mode,
+          cities_list: JSON.stringify(settings.cities_list),
+          niches_list: JSON.stringify(settings.niches_list),
+          max_leads: settings.max_leads,
+          email_signature: settings.email_signature,
+        }),
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -43,73 +150,89 @@ export default function SettingsPage() {
     }
   }
 
-  function update(key: keyof Settings, value: string) {
-    setSettings((prev) => ({ ...prev, [key]: value }))
-  }
-
   return (
     <div className="space-y-8 max-w-2xl">
       <div>
         <h1 className="text-2xl font-bold">Instellingen</h1>
-        <p className="text-white/45 text-sm mt-1">Configureer de dagelijkse pipeline</p>
+        <p className="text-white/45 text-sm mt-1">Auto-scrape modus, rotatie &amp; e-mail configuratie</p>
       </div>
 
+      {/* Auto scrape mode */}
+      <div className="bg-surface rounded-xl border border-subtle overflow-hidden">
+        <div className="p-5 border-b border-subtle">
+          <h2 className="font-semibold text-sm">Auto-scrape modus</h2>
+          <p className="text-white/40 text-xs mt-1">
+            De dagelijkse Vercel cron job draait elke ochtend om 09:00 en roteert door de steden en niches hieronder.
+          </p>
+        </div>
+        <div className="divide-y divide-subtle">
+          {MODE_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setSettings(s => ({ ...s, auto_mode: opt.value }))}
+              className={`w-full text-left p-5 flex items-start gap-4 transition-colors hover:bg-white/[0.03] ${settings.auto_mode === opt.value ? 'bg-white/[0.04]' : ''}`}
+            >
+              <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${settings.auto_mode === opt.value ? opt.color.split(' ')[0] : 'border-white/20'}`}>
+                {settings.auto_mode === opt.value && <div className={`w-2 h-2 rounded-full ${opt.value === 'auto_draft' ? 'bg-yellow-400' : opt.value === 'auto_send' ? 'bg-green-400' : 'bg-white'}`} />}
+              </div>
+              <div>
+                <p className={`text-sm font-medium ${settings.auto_mode === opt.value ? opt.color.split(' ')[1] : 'text-white/70'}`}>
+                  {opt.label}
+                </p>
+                <p className="text-xs text-white/40 mt-0.5">{opt.desc}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Cities + Niches rotation */}
       <div className="bg-surface rounded-xl border border-subtle divide-y divide-subtle">
-        {/* Default niche */}
-        <div className="p-5">
-          <label className="block text-sm font-medium mb-1">Standaard niche</label>
-          <p className="text-white/40 text-xs mb-3">
-            Wordt gebruikt door de dagelijkse cron job als er geen niche is opgegeven.
+        <div className="p-5 pb-3">
+          <h2 className="font-semibold text-sm">Rotatie</h2>
+          <p className="text-white/40 text-xs mt-1">
+            Elke cron run pakt de volgende stad + niche uit de lijst. Druk Enter of komma om een item toe te voegen.
           </p>
-          <input
-            type="text"
-            value={settings.default_niche}
-            onChange={(e) => update('default_niche', e.target.value)}
-            placeholder="bijv. loodgieter"
-            className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 w-full max-w-sm"
-          />
         </div>
 
-        {/* Default city */}
-        <div className="p-5">
-          <label className="block text-sm font-medium mb-1">Standaard stad</label>
-          <p className="text-white/40 text-xs mb-3">
-            De stad die gebruikt wordt bij de dagelijkse run.
-          </p>
-          <input
-            type="text"
-            value={settings.default_city}
-            onChange={(e) => update('default_city', e.target.value)}
-            placeholder="bijv. Amsterdam"
-            className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 w-full max-w-sm"
-          />
-        </div>
+        <TagInput
+          label="Steden"
+          description="De cron roteert dagelijks door deze steden (bijv. Amsterdam → Rotterdam → Utrecht → …)"
+          placeholder="Voeg stad toe…"
+          tags={settings.cities_list}
+          onChange={cities_list => setSettings(s => ({ ...s, cities_list }))}
+        />
 
-        {/* Max leads */}
+        <TagInput
+          label="Niches / Beroepen"
+          description="De cron roteert door deze niches (bijv. loodgieter → schilder → elektricien → …)"
+          placeholder="Voeg niche toe…"
+          tags={settings.niches_list}
+          onChange={niches_list => setSettings(s => ({ ...s, niches_list }))}
+        />
+
         <div className="p-5">
           <label className="block text-sm font-medium mb-1">Max leads per run</label>
-          <p className="text-white/40 text-xs mb-3">
-            Hoeveel bedrijven Apify per run scrapet (10–100).
-          </p>
+          <p className="text-white/40 text-xs mb-3">Hoeveel bedrijven Apify per cron run scrapet (10–100).</p>
           <input
             type="number"
             min="10"
             max="100"
             value={settings.max_leads}
-            onChange={(e) => update('max_leads', e.target.value)}
+            onChange={e => setSettings(s => ({ ...s, max_leads: e.target.value }))}
             className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20 w-24"
           />
         </div>
+      </div>
 
-        {/* Email signature */}
+      {/* Email signature */}
+      <div className="bg-surface rounded-xl border border-subtle">
         <div className="p-5">
           <label className="block text-sm font-medium mb-1">E-mail handtekening</label>
-          <p className="text-white/40 text-xs mb-3">
-            Wordt onderaan elke Gmail draft geplaatst.
-          </p>
+          <p className="text-white/40 text-xs mb-3">Wordt onderaan elke e-mail geplaatst.</p>
           <textarea
             value={settings.email_signature}
-            onChange={(e) => update('email_signature', e.target.value)}
+            onChange={e => setSettings(s => ({ ...s, email_signature: e.target.value }))}
             rows={4}
             className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 w-full resize-none"
           />
@@ -125,16 +248,14 @@ export default function SettingsPage() {
         >
           {saving ? 'Opslaan…' : 'Opslaan'}
         </button>
-        {saved && (
-          <span className="text-green-400 text-sm">✓ Opgeslagen</span>
-        )}
+        {saved && <span className="text-green-400 text-sm">✓ Opgeslagen</span>}
       </div>
 
-      {/* Info section */}
+      {/* API keys info */}
       <div className="bg-surface rounded-xl border border-subtle p-5 space-y-3">
         <h2 className="font-semibold text-sm">API sleutels &amp; credentials</h2>
         <p className="text-white/45 text-sm">
-          API keys worden niet hier opgeslagen — gebruik Vercel Environment Variables.
+          API keys worden niet hier opgeslagen — gebruik Vercel &amp; Hetzner Environment Variables.
         </p>
         <div className="space-y-1.5 text-xs text-white/40 font-mono">
           {[
@@ -144,12 +265,11 @@ export default function SettingsPage() {
             'NEXT_PUBLIC_SUPABASE_ANON_KEY',
             'SUPABASE_SERVICE_ROLE_KEY',
             'VERCEL_API_TOKEN',
-            'SMTP_HOST',
-            'SMTP_PORT',
-            'SMTP_USER',
-            'SMTP_PASS',
+            'SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS',
+            'IMAP_HOST / IMAP_PORT',
             'CRON_SECRET',
-          ].map((key) => (
+            'PIPELINE_SERVER_URL / PIPELINE_SECRET',
+          ].map(key => (
             <div key={key} className="flex items-center gap-2">
               <span className="text-white/20">•</span>
               <span>{key}</span>

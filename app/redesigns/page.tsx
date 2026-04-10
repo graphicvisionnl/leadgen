@@ -19,19 +19,24 @@ export default function RedesignsPage() {
     fetchLeads().finally(() => setIsLoading(false))
   }, [fetchLeads])
 
+  // Leads that have been redesigned but not yet deployed
+  const pendingDeploy = leads.filter(l => l.status === 'redesigned')
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Redesigns</h1>
-        <p className="text-white/45 text-sm mt-1">Websites gegenereerd, klaar voor deployment</p>
+        <p className="text-white/45 text-sm mt-1">Automatisch gegenereerd na reactie — Email 2 concept klaar voor review</p>
       </div>
-      <PhaseRunner
-        phase="phase4"
-        label="Deploy naar Vercel"
-        color="text-green-400"
-        leadCount={leads.length}
-        onDone={fetchLeads}
-      />
+      {pendingDeploy.length > 0 && (
+        <PhaseRunner
+          phase="phase4"
+          label="Deploy naar Vercel"
+          color="text-green-400"
+          leadCount={pendingDeploy.length}
+          onDone={fetchLeads}
+        />
+      )}
       <LeadsTable
         leads={leads}
         statusFilter="redesigned"
