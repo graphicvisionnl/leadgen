@@ -554,14 +554,29 @@ OUTPUT QUALITY:
 - Reviews: realistic, detailed Dutch reviews (3–4 sentences), not just "Goede service!"
 - Total HTML: 700+ lines`
 
-      const htmlModel = process.env.HTML_MODEL ?? 'claude-opus-4-6'
-      const response = await callKieStreaming({
+      const htmlModel = process.env.HTML_MODEL ?? 'claude-sonnet-4-6'
+      const fallbackModel = 'claude-opus-4-6'
+
+      let response = await callKieStreaming({
         model: htmlModel, max_tokens: 32000, system: phase3System(),
         messages: [{ role: 'user', content: prompt }],
       })
 
-      const text = response.content[0].type === 'text' ? response.content[0].text : ''
-      log('Phase 3', `Stop reason: ${response.stop_reason}, tokens: ${response.usage?.output_tokens}`)
+      let text = response.content[0].type === 'text' ? response.content[0].text : ''
+      const wasTruncated = response.stop_reason !== 'end_turn' || !text.includes('</html>')
+      log('Phase 3', `Model: ${htmlModel} | Stop reason: ${response.stop_reason} | tokens: ${response.usage?.output_tokens}${wasTruncated ? ' ⚠ TRUNCATED' : ''}`)
+
+      // If Sonnet truncated, retry with Opus automatically
+      if (wasTruncated && htmlModel !== fallbackModel) {
+        log('Phase 3', `Output afgekapt — retry met ${fallbackModel}`)
+        response = await callKieStreaming({
+          model: fallbackModel, max_tokens: 32000, system: phase3System(),
+          messages: [{ role: 'user', content: prompt }],
+        })
+        text = response.content[0].type === 'text' ? response.content[0].text : ''
+        log('Phase 3', `Fallback ${fallbackModel} | Stop reason: ${response.stop_reason} | tokens: ${response.usage?.output_tokens}`)
+      }
+
       const html = text.substring(text.indexOf('<!DOCTYPE html>'))
       if (!html.startsWith('<!DOCTYPE')) throw new Error('Geen geldige HTML ontvangen')
 
