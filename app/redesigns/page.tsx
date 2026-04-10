@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { LeadsTable } from '@/components/LeadsTable'
+import { PhaseRunner } from '@/components/PhaseRunner'
 import { Lead } from '@/types'
 
 export default function RedesignsPage() {
@@ -24,6 +25,13 @@ export default function RedesignsPage() {
         <h1 className="text-2xl font-bold">Redesigns</h1>
         <p className="text-white/45 text-sm mt-1">Websites gegenereerd, klaar voor deployment</p>
       </div>
+      <PhaseRunner
+        phase="phase4"
+        label="Deploy naar Vercel"
+        color="text-green-400"
+        leadCount={leads.length}
+        onDone={fetchLeads}
+      />
       <LeadsTable
         leads={leads}
         statusFilter="redesigned"

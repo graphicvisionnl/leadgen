@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { LeadsTable } from '@/components/LeadsTable'
+import { PhaseRunner } from '@/components/PhaseRunner'
 import { Lead } from '@/types'
 
 export default function QualifiedPage() {
@@ -24,6 +25,13 @@ export default function QualifiedPage() {
         <h1 className="text-2xl font-bold">Gekwalificeerd</h1>
         <p className="text-white/45 text-sm mt-1">Leads klaar voor redesign generatie</p>
       </div>
+      <PhaseRunner
+        phase="phase3"
+        label="Genereer redesigns"
+        color="text-purple-400"
+        leadCount={leads.length}
+        onDone={fetchLeads}
+      />
       <LeadsTable
         leads={leads}
         statusFilter="qualified"
