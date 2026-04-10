@@ -818,9 +818,11 @@ TIMING:
 STRATEGIE PER EMAIL:
 
 Email 1 — GEEN preview link, GEEN button, GEEN afbeeldingen. Pure tekst. Max 5 zinnen.
-- Benoem 1–2 van de volgende specifieke issues: ${issueText}
-- Wek nieuwsgierigheid zonder te veel te onthullen
+- Leg uit WAAROM de huidige website niet werkt. Gebruik max 2 concrete problemen: ${issueText}
+- Koppel elk probleem aan het gevolg voor hun bedrijf (bijv. bezoekers haken af, minder bellers, geen vertrouwen)
+- Geef aan dat wij dit hebben opgelost — zonder te onthullen HOE of WAT
 - Eindig met een curiosity-gebaseerde CTA, bijv. "Wil je zien hoe het er beter uit kan zien?"
+- Toon: direct, geen verkooppraatje — gewoon iemand die een probleem benoemt dat hij herkent
 
 Email 2 — Onthul de preview. Noem CONCREET wat verbeterd is: ${improvementText}
 - Open met "Ik heb alvast iets voor je gemaakt..."
@@ -899,8 +901,10 @@ Specifieke website-issues: ${variantIssueText}
 STRENGE REGELS VOOR ALLE VARIANTEN:
 - ABSOLUUT GEEN links, URLs, buttons of afbeeldingen
 - Max 5 zinnen
-- Benoem 1–2 van de bovenstaande specifieke issues
-- Eindig met een curiosity-gebaseerde CTA (geen "Wil je...?" herhalen — varieer de formulering)
+- Leg uit WAAROM de website niet werkt — gebruik max 2 concrete issues: ${variantIssueText}
+- Koppel elk probleem aan het gevolg voor hun bedrijf (bezoekers die afhaken, minder bellers, geen vertrouwen)
+- Geef aan dat dit opgelost is — zonder te onthullen hoe of wat
+- Eindig met een curiosity-gebaseerde CTA (varieer de formulering per variant)
 - Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
 - Alle tekst in het Nederlands
 
