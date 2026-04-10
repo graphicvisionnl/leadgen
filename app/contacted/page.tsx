@@ -28,6 +28,7 @@ const CRM_COLORS: Record<CrmStatus, string> = {
 export default function ContactedPage() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [checkingReplies, setCheckingReplies] = useState(false)
 
   const fetchLeads = useCallback(async () => {
     const res = await fetch('/api/leads?status=sent')
@@ -39,13 +40,32 @@ export default function ContactedPage() {
     fetchLeads().finally(() => setIsLoading(false))
   }, [fetchLeads])
 
+  async function checkReplies() {
+    setCheckingReplies(true)
+    await fetch('/api/pipeline/check-replies', { method: 'POST' }).catch(() => null)
+    await new Promise(r => setTimeout(r, 3000))
+    await fetchLeads()
+    setCheckingReplies(false)
+  }
+
   const dueLeads = leads.filter(l => l.next_followup_at && isPast(new Date(l.next_followup_at)) && !l.sequence_stopped)
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Benaderd</h1>
-        <p className="text-white/45 text-sm mt-1">CRM status & e-mailsequentie tracking</p>
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Benaderd</h1>
+          <p className="text-white/45 text-sm mt-1">CRM status & e-mailsequentie tracking</p>
+        </div>
+        <button
+          onClick={checkReplies}
+          disabled={checkingReplies}
+          className="flex items-center gap-1.5 px-4 py-2 bg-surface border border-subtle text-white/60 rounded-lg text-sm hover:text-white hover:border-white/20 transition-colors disabled:opacity-50"
+        >
+          {checkingReplies
+            ? <><span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />Checken…</>
+            : '↻ Check reacties (IMAP)'}
+        </button>
       </div>
 
       {dueLeads.length > 0 && (
@@ -85,9 +105,16 @@ export default function ContactedPage() {
                 return (
                   <tr key={lead.id} className="border-b border-subtle last:border-0 hover:bg-white/[0.03] transition-colors">
                     <td className="px-4 py-3">
-                      <Link href={`/leads/${lead.id}`} className="font-medium hover:text-brand transition-colors">
-                        {lead.company_name ?? '—'}
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/leads/${lead.id}`} className="font-medium hover:text-brand transition-colors">
+                          {lead.company_name ?? '—'}
+                        </Link>
+                        {lead.reply_received_at && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${lead.email2_draft_ready ? 'bg-green-500/15 text-green-400' : 'bg-yellow-400/15 text-yellow-400'}`}>
+                            {lead.email2_draft_ready ? '✓ concept' : '↩ reactie'}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-white/30 mt-0.5">{lead.niche} · {lead.city}</p>
                     </td>
                     <td className="px-4 py-3">

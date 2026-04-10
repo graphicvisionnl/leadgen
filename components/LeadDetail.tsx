@@ -3,10 +3,115 @@
 import Image from 'next/image'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Lead, LeadStatus, CrmStatus, ScoreBreakdown, EmailVariant } from '@/types'
+import { Lead, LeadStatus, CrmStatus, ScoreBreakdown, EmailVariant, ReplyClassification } from '@/types'
 import { StatusBadge } from './StatusBadge'
 import { formatDistanceToNow, isPast } from 'date-fns'
 import { nl } from 'date-fns/locale'
+
+const REPLY_CLASS_LABELS: Record<ReplyClassification, { label: string; color: string }> = {
+  interested:      { label: 'Geïnteresseerd',  color: 'text-green-400' },
+  question:        { label: 'Vraag',            color: 'text-blue-400' },
+  price_check:     { label: 'Prijs check',      color: 'text-yellow-400' },
+  busy_later:      { label: 'Later',            color: 'text-white/50' },
+  not_interested:  { label: 'Niet geïnteresseerd', color: 'text-red-400' },
+  out_of_office:   { label: 'Afwezig',          color: 'text-white/40' },
+  other:           { label: 'Overig',           color: 'text-white/40' },
+}
+
+function ReplyPanel({ lead, onTriggered }: { lead: Lead; onTriggered: () => void }) {
+  const [manualReply, setManualReply] = useState('')
+  const [showManual, setShowManual] = useState(!lead.reply_received_at)
+  const [triggering, setTriggering] = useState(false)
+  const [error, setError] = useState('')
+  const cls = lead.reply_classification ? REPLY_CLASS_LABELS[lead.reply_classification] : null
+
+  async function triggerOnReply(text: string) {
+    setTriggering(true)
+    setError('')
+    const res = await fetch(`/api/leads/${lead.id}/on-reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replyText: text }),
+    })
+    const data = await res.json()
+    if (res.ok) {
+      onTriggered()
+    } else {
+      setError(data.error ?? 'Fout')
+      setTriggering(false)
+    }
+  }
+
+  return (
+    <div className={`rounded-xl border p-5 space-y-4 ${lead.reply_received_at ? 'bg-green-500/5 border-green-500/20' : 'bg-surface border-subtle'}`}>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <p className="text-white/40 text-xs uppercase tracking-wider mb-1">Reactie ontvangen</p>
+          {lead.reply_received_at && (
+            <p className="text-xs text-white/30">
+              {formatDistanceToNow(new Date(lead.reply_received_at), { addSuffix: true, locale: nl })}
+              {cls && <span className={`ml-2 font-medium ${cls.color}`}>· {cls.label}</span>}
+            </p>
+          )}
+        </div>
+        {lead.reply_received_at && !lead.email2_draft_ready && (
+          <button
+            onClick={() => triggerOnReply(lead.reply_text ?? '')}
+            disabled={triggering}
+            className="px-3 py-1.5 bg-brand text-white rounded-lg text-xs font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {triggering
+              ? <><span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />Bezig…</>
+              : '▶ Genereer redesign + draft'}
+          </button>
+        )}
+      </div>
+
+      {lead.reply_text && (
+        <div className="bg-black/20 rounded-lg p-3 text-sm text-white/70 font-mono whitespace-pre-wrap">
+          {lead.reply_text}
+        </div>
+      )}
+
+      {lead.email2_draft_ready && (
+        <p className="text-xs text-green-400 flex items-center gap-1.5">
+          <span>✓</span> Email 2 concept klaar — zie de sequentie hieronder
+        </p>
+      )}
+
+      {/* Manual reply input */}
+      <div>
+        <button
+          onClick={() => setShowManual(v => !v)}
+          className="text-xs text-white/35 hover:text-white/60 transition-colors"
+        >
+          {showManual ? '▲ Verberg' : '+ Voer reactie handmatig in'}
+        </button>
+        {showManual && (
+          <div className="mt-3 space-y-2">
+            <textarea
+              value={manualReply}
+              onChange={e => setManualReply(e.target.value)}
+              placeholder="Plak hier de reactie van de lead..."
+              rows={4}
+              className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 font-mono resize-y"
+            />
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+            <button
+              onClick={() => triggerOnReply(manualReply)}
+              disabled={triggering || !manualReply.trim()}
+              className="px-4 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {triggering
+                ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Verwerken…</>
+                : 'Verwerk reactie + genereer redesign'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const CRM_OPTIONS: { value: CrmStatus; label: string; color: string }[] = [
   { value: 'not_contacted', label: 'Niet benaderd', color: 'text-white/40' },
@@ -361,6 +466,11 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
       </div>
 
       {/* Email sequence panel */}
+      {/* Reply panel — shown when a reply has been received */}
+      {lead.reply_received_at && (
+        <ReplyPanel lead={lead} onTriggered={() => window.location.reload()} />
+      )}
+
       <div className="bg-surface rounded-xl border border-subtle p-6 space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">

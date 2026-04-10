@@ -16,6 +16,15 @@ export type CrmStatus =
   | 'closed'
   | 'rejected'
 
+export type ReplyClassification =
+  | 'interested'
+  | 'question'
+  | 'price_check'
+  | 'busy_later'
+  | 'not_interested'
+  | 'out_of_office'
+  | 'other'
+
 export interface ScoreBreakdown {
   website_exists: boolean
   email_found: boolean
@@ -81,6 +90,11 @@ export interface Lead {
   email4_sent_at: string | null
   email_variants: EmailVariant[] | null
   selected_variant: number | null
+  // Reply tracking
+  reply_received_at: string | null
+  reply_text: string | null
+  reply_classification: ReplyClassification | null
+  email2_draft_ready: boolean | null
 }
 
 export interface PipelineRun {

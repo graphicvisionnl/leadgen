@@ -3,6 +3,7 @@ import express from 'express'
 import { createClient } from '@supabase/supabase-js'
 import puppeteer from 'puppeteer'
 import nodemailer from 'nodemailer'
+import { ImapFlow } from 'imapflow'
 import * as fs from 'fs'
 import * as path from 'path'
 
@@ -690,6 +691,385 @@ async function phase4(runId: string) {
   await supabase.from('pipeline_runs').update({ deployed_count: deployed, completed_at: new Date().toISOString(), status: 'completed' }).eq('id', runId)
 }
 
+// ─── Pipeline helpers (used by auto /run) ────────────────────────────────────
+
+// Reusable: generate the 4-email sequence for a lead (same logic as the route)
+async function generateEmailSequenceForLead(lead: any) {
+  const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
+  const issues: string[] = []
+  if (breakdown.outdated_feel) issues.push('de website heeft een verouderde uitstraling')
+  if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action boven de vouw')
+  if (!breakdown.mobile_friendly) issues.push('de mobiele versie voelt verouderd aan')
+  if (!breakdown.email_found && !lead.email) issues.push('contactgegevens zijn moeilijk te vinden')
+  const issueText = issues.slice(0, 2).join(' en ') || 'verouderde website'
+
+  const improvements: string[] = []
+  if (breakdown.outdated_feel) improvements.push('moderne layout en uitstraling')
+  if (!breakdown.has_cta) improvements.push('duidelijke call-to-action toegevoegd')
+  if (!breakdown.mobile_friendly) improvements.push('volledig mobiel geoptimaliseerd')
+  if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
+  const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
+
+  const shortName = (lead.company_name ?? '').split(/[|&·]/)[0].trim()
+    .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
+
+  const prompt = `Schrijf een e-mailreeks van 4 e-mails namens Ezra van Graphic Vision (webdesign bureau) voor dit lead:
+
+Bedrijf: ${lead.company_name}
+Niche: ${lead.niche}
+Stad: ${lead.city ?? 'onbekend'}
+Wat er mis is: ${issueText}
+Wat verbeterd is in het redesign: ${improvementText}
+Preview URL: wordt later toegevoegd in email 2–4
+
+TIMING:
+- Email 1: Dag 0
+- Email 2: Dag 1
+- Email 3: Dag 3
+- Email 4: Dag 5–7
+
+STRATEGIE PER EMAIL:
+
+Email 1 — GEEN preview link, GEEN button, GEEN afbeeldingen. Pure tekst. Max 5 zinnen.
+- Leg uit WAAROM de huidige website niet werkt. Gebruik max 2 concrete problemen: ${issueText}
+- Koppel elk probleem aan het gevolg voor hun bedrijf (bezoekers haken af, minder bellers, geen vertrouwen)
+- Geef aan dat wij dit hebben opgelost — zonder te onthullen HOE of WAT
+- Eindig met een curiosity-gebaseerde CTA, bijv. "Wil je zien hoe het er beter uit kan zien?"
+- Toon: direct, geen verkooppraatje — gewoon iemand die een probleem benoemt dat hij herkent
+
+Email 2 — wordt gegenereerd na een reactie van de lead (PLACEHOLDER — schrijf een placeholder "Email 2 volgt na reactie")
+Email 3 — Korte follow-up: "Nog even dit..." — max 3 zinnen, geen URL (wordt later ingevuld)
+Email 4 — Sluit het dossier: "Ik sluit het bestand..." — max 3 zinnen, geen URL (wordt later ingevuld)
+
+REGELS VOOR ALLE EMAILS:
+- Begin met "Goedendag," of "Hey ${shortName},"
+- Sluit af met "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Geen bullet points, kort en persoonlijk
+- Alle tekst in het Nederlands
+- Email 1 bevat ABSOLUUT GEEN links of URLs
+
+Geef ALLEEN dit JSON terug, niets anders:
+{
+  "email1": {"subject": "...", "body": "..."},
+  "email2": {"subject": "Concept klaar", "body": "Email 2 volgt na reactie"},
+  "email3": {"subject": "...", "body": "..."},
+  "email4": {"subject": "...", "body": "..."}
+}`
+
+  const response = await callClaude({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+  const textBlock = response.content?.find((b: any) => b.type === 'text')
+  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Geen JSON in sequence response')
+  const emails = JSON.parse(jsonMatch[0])
+
+  await supabase.from('leads').update({
+    email1_subject: emails.email1.subject, email1_body: emails.email1.body,
+    email2_subject: emails.email2.subject, email2_body: emails.email2.body,
+    email3_subject: emails.email3.subject, email3_body: emails.email3.body,
+    email4_subject: emails.email4.subject, email4_body: emails.email4.body,
+    email_subject: emails.email1.subject,  email_body: emails.email1.body,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+}
+
+// Reusable: send a specific email number (1–4) for a lead
+async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
+  const subjectKey = `email${emailNumber}_subject` as const
+  const bodyKey = `email${emailNumber}_body` as const
+  const subject: string = lead[subjectKey] ?? lead.email_subject ?? ''
+  const body: string = lead[bodyKey] ?? lead.email_body ?? ''
+  if (!subject || !body || !lead.email) throw new Error('Ontbrekende email data')
+
+  const { data: settingsRows } = await supabase.from('settings').select('*')
+  const settings = Object.fromEntries(
+    (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
+  )
+
+  const transport = nodemailer.createTransport({
+    host: process.env.SMTP_HOST!,
+    port: parseInt(process.env.SMTP_PORT ?? '465'),
+    secure: process.env.SMTP_PORT !== '587',
+    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+  })
+
+  // Build plain HTML (no CTA button for email 1 — no preview URL yet)
+  const previewUrl = emailNumber > 1 ? lead.preview_url : null
+  const cleanBodyHtml = body.split('\n\n').filter(p => p.trim()).map(para => {
+    if (previewUrl && para.includes(previewUrl)) {
+      return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px"><tr><td><a href="${previewUrl}" target="_blank" style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px">Bekijk jouw nieuwe website →</a></td></tr></table>`
+    }
+    const escaped = para.split('\n').map((l: string) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).join('<br>')
+    return `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
+  }).join('')
+
+  const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 0"><tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
+<tr><td style="background:#0f0f0f;padding:28px 40px"><img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png" alt="Graphic Vision" width="160" style="display:block;height:auto"></td></tr>
+<tr><td style="padding:40px 40px 32px">${cleanBodyHtml}</td></tr>
+<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">Ezra — Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
+</table></td></tr></table></body></html>`
+
+  await transport.sendMail({
+    from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
+    to: lead.email,
+    bcc: 'graphicvisionnl@gmail.com',
+    subject,
+    html,
+    text: body,
+  })
+
+  const seqIndex = emailNumber - 1
+  const followupDelays: Record<number, number> = { 1: 1, 2: 3, 3: 6 }
+  const followupDays = followupDelays[emailNumber]
+  const next_followup_at = followupDays ? new Date(Date.now() + followupDays * 24 * 60 * 60 * 1000).toISOString() : null
+  const sentAtField = `email${emailNumber}_sent_at`
+
+  await supabase.from('leads').update({
+    status: 'sent',
+    crm_status: 'contacted',
+    email_sequence_index: emailNumber,
+    [sentAtField]: new Date().toISOString(),
+    next_followup_at,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+
+  log('Mail', `Email ${emailNumber} verstuurd naar ${lead.email} (${lead.company_name})`)
+}
+
+// ─── Reply classification ─────────────────────────────────────────────────────
+type ReplyClass = 'interested' | 'question' | 'price_check' | 'busy_later' | 'not_interested' | 'out_of_office' | 'other'
+
+async function classifyReply(replyText: string, lead: any): Promise<{ classification: ReplyClass; summary: string }> {
+  const prompt = `Je bent een assistent voor een webdesign bureau. Classificeer deze e-mailreactie van een prospect.
+
+Onze originele e-mail ging over: de website van ${lead.company_name} (${lead.niche}) heeft problemen en wij hebben een oplossing.
+
+Reactie van de prospect:
+"""
+${replyText.slice(0, 1000)}
+"""
+
+Kies EXACT één van deze categorieën:
+- interested: ze willen meer weten of zijn positief
+- question: ze stellen een specifieke vraag over de dienst/website
+- price_check: ze vragen naar prijs of kosten
+- busy_later: ze zijn nu druk maar willen later meer horen
+- not_interested: ze willen geen contact of zijn duidelijk negatief
+- out_of_office: automatische afwezigheidsreactie
+- other: onduidelijk of past niet in andere categorie
+
+Geef ALLEEN dit JSON terug:
+{"classification":"interested","summary":"één zin wat ze zeggen in het Nederlands"}`
+
+  const response = await callClaude({ max_tokens: 100, messages: [{ role: 'user', content: prompt }] })
+  const textBlock = response.content?.find((b: any) => b.type === 'text')
+  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return { classification: 'other', summary: replyText.slice(0, 100) }
+  return JSON.parse(jsonMatch[0])
+}
+
+// Strip quoted reply text — keep only the new part of the reply
+function extractReplyText(raw: string): string {
+  return raw
+    .split(/\n(?:>|Op .* schreef|On .* wrote|Van:|From:)/m)[0]
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .slice(0, 2000)
+}
+
+// Core reply handler — classify, save, trigger redesign pipeline, draft Email 2
+async function processReply(lead: any, rawReplyText: string) {
+  const replyText = extractReplyText(rawReplyText)
+  log('Reply', `Reactie van ${lead.company_name}: "${replyText.slice(0, 80)}…"`)
+
+  const { classification, summary } = await classifyReply(replyText, lead)
+  log('Reply', `Classificatie: ${classification} — ${summary}`)
+
+  // Always save the reply
+  await supabase.from('leads').update({
+    reply_received_at: new Date().toISOString(),
+    reply_text: replyText,
+    reply_classification: classification,
+    crm_status: classification === 'not_interested' ? 'rejected' : 'replied',
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+
+  // Stop sequence on rejection
+  if (classification === 'not_interested') {
+    await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
+    log('Reply', `${lead.company_name} niet geïnteresseerd — sequentie gestopt`)
+    return
+  }
+
+  // Reschedule followup for out-of-office
+  if (classification === 'out_of_office') {
+    const reschedule = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    await supabase.from('leads').update({ next_followup_at: reschedule }).eq('id', lead.id)
+    log('Reply', `${lead.company_name} afwezig — herinnering ingepland over 7 dagen`)
+    return
+  }
+
+  // For all other classifications: generate redesign + deploy + draft Email 2
+  log('Reply', `${lead.company_name} (${classification}) — redesign starten`)
+
+  try {
+    // Phase 3: Generate redesign
+    await phase3SingleLead(lead)
+
+    // Reload lead to get updated status + any changes
+    const { data: updatedLead } = await supabase.from('leads').select('*').eq('id', lead.id).single()
+    if (!updatedLead?.status || updatedLead.status !== 'redesigned') {
+      throw new Error('Redesign niet voltooid')
+    }
+
+    // Phase 4: Deploy
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+    try {
+      await phase4SingleLead(updatedLead, browser)
+    } finally {
+      await browser.close()
+    }
+
+    // Reload again to get preview_url
+    const { data: deployedLead } = await supabase.from('leads').select('*').eq('id', lead.id).single()
+    if (!deployedLead?.preview_url) throw new Error('Geen preview URL na deployment')
+
+    // Generate Email 2 draft — personalized to their reply
+    await generateEmail2Draft(deployedLead, replyText, classification, summary)
+
+    log('Reply', `${lead.company_name} — redesign live, email 2 concept klaar`)
+  } catch (e) {
+    log('Reply', `Fout bij verwerken reactie ${lead.company_name}: ${e}`)
+    await supabase.from('leads').update({ qualify_reason: `Reply pipeline fout: ${e}` }).eq('id', lead.id)
+  }
+}
+
+async function generateEmail2Draft(lead: any, replyText: string, classification: ReplyClass, summary: string) {
+  const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
+  const improvements: string[] = []
+  if (breakdown.outdated_feel) improvements.push('moderne uitstraling')
+  if (!breakdown.has_cta) improvements.push('duidelijke call-to-action')
+  if (!breakdown.mobile_friendly) improvements.push('volledig mobiel geoptimaliseerd')
+  if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
+  const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
+
+  const toneInstruction: Record<ReplyClass, string> = {
+    interested:      'Ze zijn positief — wees enthousiast maar niet te opdringerig. Bevestig hun interesse.',
+    question:        `Ze stellen een vraag: "${summary}". Beantwoord dit kort en direct voor je de preview laat zien.`,
+    price_check:     'Ze vragen naar prijs. Leg uit dat dit concept gratis is als eerste indruk, en dat de prijs afhangt van de wensen. Geen bedragen noemen.',
+    busy_later:      'Ze zijn nu druk. Erken dit, wees begripvol, en zeg dat je alvast iets hebt klaarstaan voor ze.',
+    not_interested:  '',
+    out_of_office:   '',
+    other:           'Neutraal en vriendelijk. Reageer op hun bericht en onthul de preview.',
+  }
+
+  const shortName = (lead.company_name ?? '').split(/[|&·]/)[0].trim()
+    .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
+
+  const prompt = `Schrijf een persoonlijke e-mailreactie namens Ezra van Graphic Vision.
+
+Context:
+- Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city ?? ''})
+- Onze eerste mail benoemde problemen met hun website
+- Hun reactie: "${replyText.slice(0, 500)}"
+- Classificatie: ${classification}
+- Wat verbeterd is in het redesign: ${improvementText}
+- Preview URL: ${lead.preview_url}
+
+Toon-instructie: ${toneInstruction[classification]}
+
+Regels:
+- Begin met "Hey ${shortName}," of "Goedendag,"
+- Reageer EERST kort op hun specifieke bericht (1–2 zinnen)
+- Onthul dan dat je alvast een concept hebt gemaakt
+- Noem concreet wat je hebt verbeterd: ${improvementText}
+- Zet de preview URL op een eigen regel met "→ "
+- Voeg toe: "Dit is nog niet definitief — alles kan worden aangepast aan jullie wensen."
+- Sluit af met uitnodiging voor een kort gesprek
+- Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Max 6 zinnen, geen bullet points, persoonlijk
+
+Geef ALLEEN dit JSON terug:
+{"subject":"...","body":"..."}`
+
+  const response = await callClaude({ max_tokens: 800, messages: [{ role: 'user', content: prompt }] })
+  const textBlock = response.content?.find((b: any) => b.type === 'text')
+  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Geen JSON in Email 2 draft response')
+  const draft = JSON.parse(jsonMatch[0])
+
+  await supabase.from('leads').update({
+    email2_subject: draft.subject,
+    email2_body: draft.body,
+    email2_draft_ready: true,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+}
+
+// ─── IMAP reply checker ───────────────────────────────────────────────────────
+async function checkReplies(): Promise<number> {
+  const client = new ImapFlow({
+    host: process.env.IMAP_HOST ?? 'imap.hostinger.com',
+    port: parseInt(process.env.IMAP_PORT ?? '993'),
+    secure: true,
+    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+    logger: false,
+  })
+
+  await client.connect()
+  let found = 0
+
+  try {
+    const lock = await client.getMailboxLock('INBOX')
+    try {
+      // Search for unseen messages
+      const uids = await client.search({ seen: false })
+      if (!uids.length) return 0
+
+      for await (const msg of client.fetch(uids, { envelope: true, bodyStructure: true, bodyParts: ['1', 'TEXT'] })) {
+        const fromEmail = msg.envelope?.from?.[0]?.address?.toLowerCase()
+        if (!fromEmail) continue
+
+        // Skip our own sent emails
+        if (fromEmail === process.env.SMTP_USER?.toLowerCase()) continue
+
+        // Match to a lead that has been emailed
+        const { data: lead } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('email', fromEmail)
+          .eq('status', 'sent')
+          .not('crm_status', 'in', '("rejected","replied","interested","closed")')
+          .single()
+
+        if (!lead) continue
+
+        // Extract body text
+        const bodyBuffer = msg.bodyParts?.get('1') ?? msg.bodyParts?.get('TEXT')
+        const rawBody = bodyBuffer ? Buffer.from(bodyBuffer as any).toString('utf-8') : msg.envelope?.subject ?? ''
+
+        // Mark as seen
+        await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true })
+
+        log('IMAP', `Reactie van ${lead.company_name} (${fromEmail})`)
+        found++
+
+        // Process async so we don't block the IMAP loop
+        processReply(lead, rawBody).catch(e => log('IMAP', `processReply fout: ${e}`))
+      }
+    } finally {
+      lock.release()
+    }
+  } finally {
+    await client.logout()
+  }
+
+  log('IMAP', `Check klaar — ${found} nieuwe reactie(s)`)
+  return found
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_, res) => res.json({ ok: true, uptime: process.uptime() }))
@@ -771,14 +1151,36 @@ app.post('/run', async (req, res) => {
 
   res.json({ success: true, runId: run!.id })
 
-  // Run pipeline in background
+  // New flow: scrape → qualify → generate email sequence → send Email 1
+  // Redesign only happens AFTER a lead replies (triggered by /on-reply/:id)
   ;(async () => {
     try {
       await phase1(run!.id, niche, city, maxLeads)
       await phase2(run!.id)
-      await phase3(run!.id)
-      await phase4(run!.id)
-      log('Pipeline', `Run ${run!.id} voltooid`)
+
+      // Generate email sequence + send Email 1 for all qualified leads with email
+      const { data: qualifiedLeads } = await supabase
+        .from('leads').select('*').eq('status', 'qualified').not('email', 'is', null)
+        .eq('pipeline_run_id', run!.id)
+
+      let emailed = 0
+      for (const lead of qualifiedLeads ?? []) {
+        try {
+          // Generate the 4-email sequence (Email 1 is text-only, no redesign needed)
+          await generateEmailSequenceForLead(lead)
+          // Send Email 1 automatically
+          await sendEmailForLead(lead, 1)
+          emailed++
+          await sleep(30_000) // 30s between sends for deliverability
+        } catch (e) {
+          log('Pipeline', `Email 1 fout voor ${lead.company_name}: ${e}`)
+        }
+      }
+
+      log('Pipeline', `Run ${run!.id} voltooid — ${emailed} emails verstuurd, wacht op reacties`)
+      await supabase.from('pipeline_runs').update({
+        status: 'completed', completed_at: new Date().toISOString(),
+      }).eq('id', run!.id)
     } catch (e) {
       log('Pipeline', `Run ${run!.id} mislukt: ${e}`)
       await supabase.from('pipeline_runs').update({ status: 'failed', error: String(e) }).eq('id', run!.id)
@@ -1219,6 +1621,27 @@ app.post('/send-email/:id', async (req, res) => {
 app.get('/status/:runId', async (req, res) => {
   const { data } = await supabase.from('pipeline_runs').select('*').eq('id', req.params.runId).single()
   res.json(data)
+})
+
+// ─── Reply routes ─────────────────────────────────────────────────────────────
+
+// Manual trigger: process a reply for a specific lead
+app.post('/on-reply/:id', async (req, res) => {
+  const { id } = req.params
+  const { replyText } = req.body
+  if (!replyText) return res.status(400).json({ error: 'replyText verplicht' })
+
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+
+  res.json({ success: true, message: 'Reactie verwerking gestart' })
+  processReply(lead, replyText).catch(e => log('Reply', `on-reply fout: ${e}`))
+})
+
+// Poll inbox for new replies
+app.post('/check-replies', async (req, res) => {
+  res.json({ success: true, message: 'IMAP check gestart' })
+  checkReplies().catch(e => log('IMAP', `check-replies fout: ${e}`))
 })
 
 const PORT = process.env.PORT ?? 3001
