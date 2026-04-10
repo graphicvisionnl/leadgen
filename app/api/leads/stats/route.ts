@@ -1,30 +1,28 @@
+export const dynamic = 'force-dynamic'
+
 import { NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase'
 
 export async function GET() {
   const supabase = createServerSupabaseClient()
 
-  // Count leads by status created today
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const [leadsRes, hotRes, followupRes] = await Promise.all([
+    supabase.from('leads').select('status'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('hot_lead', true).eq('crm_status', 'not_contacted'),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .lte('next_followup_at', new Date().toISOString())
+      .eq('sequence_stopped', false)
+      .not('next_followup_at', 'is', null),
+  ])
 
-  const { data, error } = await supabase
-    .from('leads')
-    .select('status')
-    .gte('created_at', today.toISOString())
-
-  if (error) {
-    return NextResponse.json({ scraped: 0, qualified: 0, deployed: 0, sent: 0 })
-  }
-
-  const leads = data ?? []
+  const leads = leadsRes.data ?? []
 
   return NextResponse.json({
-    scraped: leads.length,
-    qualified: leads.filter((l) =>
-      ['qualified', 'redesigned', 'deployed', 'sent'].includes(l.status)
-    ).length,
-    deployed: leads.filter((l) => ['deployed', 'sent'].includes(l.status)).length,
-    sent: leads.filter((l) => l.status === 'sent').length,
+    scraped: leads.filter(l => ['scraped', 'no_email'].includes(l.status)).length,
+    qualified: leads.filter(l => ['qualified', 'redesigned', 'deployed', 'sent'].includes(l.status)).length,
+    deployed: leads.filter(l => ['deployed', 'sent'].includes(l.status)).length,
+    sent: leads.filter(l => l.status === 'sent').length,
+    hot_leads: hotRes.count ?? 0,
+    due_followups: followupRes.count ?? 0,
   })
 }

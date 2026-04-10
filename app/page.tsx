@@ -1,15 +1,16 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
 import { StatsCards } from '@/components/StatsCards'
-import { LeadsTable } from '@/components/LeadsTable'
-import { Lead } from '@/types'
 
 interface Stats {
   scraped: number
   qualified: number
   deployed: number
   sent: number
+  hot_leads: number
+  due_followups: number
 }
 
 const PHASES = [
@@ -19,11 +20,17 @@ const PHASES = [
   { key: 'phase4', label: 'Deployen',             desc: 'Vercel deployment',     color: 'text-green-400' },
 ] as const
 
+const NAV_CARDS = [
+  { href: '/scraped',   label: 'Gescraped',      desc: 'Wacht op kwalificatie',  color: 'text-blue-400',   stat: 'scraped' },
+  { href: '/qualified', label: 'Gekwalificeerd',  desc: 'Klaar voor redesign',    color: 'text-yellow-400', stat: 'qualified' },
+  { href: '/redesigns', label: 'Redesigns',       desc: 'Klaar voor deployment',  color: 'text-purple-400', stat: null },
+  { href: '/deployed',  label: 'Deployed',        desc: 'Klaar om te versturen',  color: 'text-brand',      stat: 'deployed' },
+  { href: '/contacted', label: 'Benaderd',        desc: 'CRM & sequentie',        color: 'text-green-400',  stat: 'sent' },
+] as const
+
 export default function Dashboard() {
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [stats, setStats] = useState<Stats>({ scraped: 0, qualified: 0, deployed: 0, sent: 0 })
+  const [stats, setStats] = useState<Stats>({ scraped: 0, qualified: 0, deployed: 0, sent: 0, hot_leads: 0, due_followups: 0 })
   const [isLoading, setIsLoading] = useState(true)
-  const [statusFilter, setStatusFilter] = useState('all')
   const [niche, setNiche] = useState('')
   const [city, setCity] = useState('')
   const [maxLeads, setMaxLeads] = useState(30)
@@ -32,15 +39,6 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<string[]>([])
   const [logOffset, setLogOffset] = useState(0)
   const logRef = useRef<HTMLDivElement>(null)
-
-  const fetchLeads = useCallback(async (filter?: string) => {
-    const f = filter ?? statusFilter
-    const params = new URLSearchParams()
-    if (f !== 'all') params.set('status', f)
-    const res = await fetch(`/api/leads?${params}`)
-    const data = await res.json()
-    setLeads(data.leads ?? [])
-  }, [statusFilter])
 
   const fetchStats = useCallback(async () => {
     const res = await fetch('/api/leads/stats')
@@ -60,7 +58,7 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    Promise.all([fetchLeads(), fetchStats()])
+    Promise.all([fetchStats()])
       .then(() => {
         fetch('/api/settings').then(r => r.json()).then(data => {
           if (data.default_niche) setNiche(data.default_niche)
@@ -69,18 +67,17 @@ export default function Dashboard() {
         }).catch(() => null)
       })
       .finally(() => setIsLoading(false))
-  }, [fetchLeads, fetchStats])
+  }, [fetchStats])
 
   // Poll while a phase is running
   useEffect(() => {
     if (!activePhase) return
     const interval = setInterval(() => {
-      fetchLeads()
       fetchStats()
       fetchLogs(logOffset)
     }, 4000)
     return () => clearInterval(interval)
-  }, [activePhase, fetchLeads, fetchStats, fetchLogs, logOffset])
+  }, [activePhase, fetchStats, fetchLogs, logOffset])
 
   async function triggerPhase(phase: string) {
     if (activePhase) return
@@ -106,7 +103,7 @@ export default function Dashboard() {
 
     if (data?.success) {
       setRunMessage(`${PHASES.find(p => p.key === phase)?.label} gestart`)
-      setTimeout(() => { setActivePhase(null); fetchLeads(); fetchStats() }, 20 * 60 * 1000)
+      setTimeout(() => { setActivePhase(null); fetchStats() }, 20 * 60 * 1000)
     } else {
       setRunMessage(`Fout: ${data?.error ?? 'Verbindingsfout'}`)
       setActivePhase(null)
@@ -118,15 +115,7 @@ export default function Dashboard() {
     const res = await fetch('/api/leads/reset-errors', { method: 'POST' }).catch(() => null)
     const data = await res?.json()
     setRunMessage(`${data?.count ?? 0} leads gereset`)
-    fetchLeads()
     fetchStats()
-  }
-
-  function handleFilterChange(filter: string) {
-    setStatusFilter(filter)
-    setLeads([])
-    setIsLoading(true)
-    fetchLeads(filter).finally(() => setIsLoading(false))
   }
 
   const lastLog = logs[logs.length - 1] ?? ''
@@ -145,6 +134,25 @@ export default function Dashboard() {
       </div>
 
       <StatsCards stats={stats} />
+
+      {/* Quick nav cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {NAV_CARDS.map(card => (
+          <Link
+            key={card.href}
+            href={card.href}
+            className="bg-surface border border-subtle rounded-xl p-4 hover:border-white/20 hover:bg-white/[0.04] transition-all group"
+          >
+            <p className={`text-sm font-semibold ${card.color} group-hover:opacity-100`}>{card.label}</p>
+            <p className="text-xs text-white/35 mt-1">{card.desc}</p>
+            {card.stat && (
+              <p className="text-lg font-bold text-white mt-2">
+                {isLoading ? '—' : stats[card.stat as keyof Stats]}
+              </p>
+            )}
+          </Link>
+        ))}
+      </div>
 
       {/* Pipeline phases */}
       <div className="bg-surface rounded-xl border border-subtle p-6 space-y-5">
@@ -236,18 +244,6 @@ export default function Dashboard() {
           </button>
           {runMessage && <p className="text-xs text-white/40 font-mono">{runMessage}</p>}
         </div>
-      </div>
-
-      {/* Leads table */}
-      <div>
-        <h2 className="font-semibold mb-4">Leads</h2>
-        <LeadsTable
-          leads={leads}
-          statusFilter={statusFilter}
-          onFilterChange={handleFilterChange}
-          isLoading={isLoading}
-          onRefresh={() => { fetchLeads(); fetchStats() }}
-        />
       </div>
     </div>
   )

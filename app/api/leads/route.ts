@@ -16,7 +16,15 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
-  if (status) query = query.eq('status', status)
+  if (status) {
+    // Support comma-separated statuses: ?status=scraped,no_email,error
+    const statuses = status.split(',').map(s => s.trim()).filter(Boolean)
+    if (statuses.length === 1) {
+      query = query.eq('status', statuses[0])
+    } else if (statuses.length > 1) {
+      query = query.in('status', statuses)
+    }
+  }
 
   const { data, error, count } = await query
 

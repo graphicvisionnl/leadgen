@@ -30,12 +30,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="text-white/30 text-sm">/</span>
               <span className="text-white/50 text-sm">Lead Gen</span>
             </div>
-            <div className="flex items-center gap-6 text-sm">
+            <div className="flex items-center gap-5 text-sm">
               <Link href="/" className="text-white/60 hover:text-white transition-colors">
                 Dashboard
               </Link>
-              <Link href="/previews" className="text-white/60 hover:text-white transition-colors">
-                Previews
+              <Link href="/scraped" className="text-white/60 hover:text-white transition-colors">
+                Scraped
+              </Link>
+              <Link href="/qualified" className="text-white/60 hover:text-white transition-colors">
+                Qualified
+              </Link>
+              <Link href="/redesigns" className="text-white/60 hover:text-white transition-colors">
+                Redesigns
+              </Link>
+              <Link href="/deployed" className="text-white/60 hover:text-white transition-colors">
+                Deployed
+              </Link>
+              <Link href="/contacted" className="text-white/60 hover:text-white transition-colors">
+                Benaderd
               </Link>
               <Link href="/settings" className="text-white/60 hover:text-white transition-colors">
                 Instellingen

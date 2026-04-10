@@ -233,24 +233,57 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   return inserted?.length ?? 0
 }
 
-// ─── Phase 2: Email scrape + text-based qualify (no browser) ─────────────────
-async function scrapeEmailAndText(url: string): Promise<{ email: string | null; text: string }> {
+// ─── Phase 2: Scrape lead signals (email, phone, social, CTA, links) ─────────
+interface LeadSignals {
+  email: string | null
+  phone: string | null
+  whatsapp_url: string | null
+  facebook_url: string | null
+  instagram_url: string | null
+  has_cta: boolean
+  internal_link_count: number
+  text: string
+}
+
+async function scrapeLeadSignals(url: string): Promise<LeadSignals> {
+  const empty: LeadSignals = { email: null, phone: null, whatsapp_url: null, facebook_url: null, instagram_url: null, has_cta: false, internal_link_count: 0, text: '' }
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)', 'Accept-Language': 'nl,en;q=0.9' },
       signal: AbortSignal.timeout(10000),
       redirect: 'follow',
     })
-    if (!res.ok) return { email: null, text: '' }
+    if (!res.ok) return empty
     const html = await res.text()
 
-    // Extract email
+    // Email
     const mailto = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
     const emailsInPage = (html.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
       .filter(e => !e.includes('sentry') && !e.includes('example') && !e.includes('noreply') && !e.includes('@w3.org'))
     const email = mailto?.[1]?.toLowerCase() ?? emailsInPage[0]?.toLowerCase() ?? null
 
-    // Extract clean text
+    // Phone — Dutch patterns
+    const phoneMatch = html.match(/\b(?:0\d{9}|\+31[\s\-]?\d{9}|0\d{2}[\s\-]\d{7}|0\d{3}[\s\-]\d{6})\b/)
+    const phone = phoneMatch ? phoneMatch[0].replace(/\s/g, '') : null
+
+    // Social links from hrefs
+    const hrefs = (html.match(/href="([^"]+)"/gi) ?? []).map(m => m.slice(6, -1))
+    const whatsapp_url = hrefs.find(h => /wa\.me|whatsapp\.com\/send/i.test(h)) ?? null
+    const facebook_url = hrefs.find(h => /facebook\.com\//i.test(h)) ?? null
+    const instagram_url = hrefs.find(h => /instagram\.com\//i.test(h)) ?? null
+
+    // Internal links count
+    let domain = ''
+    try { domain = new URL(url).hostname } catch { /* ignore */ }
+    const internal_link_count = domain
+      ? hrefs.filter(h => { try { return new URL(h).hostname === domain } catch { return h.startsWith('/') } }).length
+      : 0
+
+    // CTA signals — Dutch keywords
+    const textLower = html.toLowerCase()
+    const has_cta = /offerte|bel ons|contact|boek|afspraak|aanvragen|gratis|direct|nu bellen/.test(textLower)
+
+    // Clean text for Claude
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -259,37 +292,64 @@ async function scrapeEmailAndText(url: string): Promise<{ email: string | null; 
       .trim()
       .slice(0, 4000)
 
-    return { email, text }
+    return { email, phone, whatsapp_url, facebook_url, instagram_url, has_cta, internal_link_count, text }
   } catch {
-    return { email: null, text: '' }
+    return empty
   }
+}
+
+interface ScoreBreakdown {
+  website_exists: boolean
+  email_found: boolean
+  phone_found: boolean
+  mobile_friendly: boolean
+  has_cta: boolean
+  outdated_feel: boolean
+  internal_link_count: number
+}
+
+function calculateLeadScore(breakdown: ScoreBreakdown): { score: number; hot_lead: boolean } {
+  let score = 0
+  if (breakdown.website_exists) score += 20
+  if (breakdown.email_found)    score += 15
+  if (breakdown.phone_found)    score += 10
+  if (breakdown.outdated_feel)  score += 15  // opportunity
+  if (!breakdown.mobile_friendly) score += 10 // opportunity
+  if (!breakdown.has_cta)       score += 15  // opportunity
+  if (breakdown.internal_link_count > 5) score += 15 // established site
+  return { score, hot_lead: score >= 65 }
 }
 
 async function phase2SingleLead(lead: any): Promise<boolean> {
   log('Phase 2', lead.company_name)
 
-  const { email: scrapedEmail, text: websiteText } = await scrapeEmailAndText(lead.website_url)
-  const email = lead.email ?? scrapedEmail
-  if (scrapedEmail && !lead.email) {
-    await supabase.from('leads').update({ email: scrapedEmail }).eq('id', lead.id)
+  const signals = await scrapeLeadSignals(lead.website_url)
+  const email = lead.email ?? signals.email
+  if (signals.email && !lead.email) {
+    await supabase.from('leads').update({ email: signals.email }).eq('id', lead.id)
   }
 
-  const prompt = `Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city})
-Website: ${lead.website_url}
-Google rating: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} reviews)
+  const prompt = `Je bent een webdesign bureau dat beoordeelt of een bedrijf een nieuwe website nodig heeft.
+Je hebt GEEN internet toegang. De website tekst hieronder is al voor jou opgehaald. Bezoek de URL NIET.
 
-Website tekst:
-${websiteText || '(niet beschikbaar)'}
+BEDRIJF: ${lead.company_name} (${lead.niche}, ${lead.city})
+GOOGLE RATING: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} reviews)
 
-Beoordeel deze website als potentiële klant voor een webdesign bureau.
-Kwalificeer als de website verouderd, amateuristisch of slecht converterende is.
-Disqualificeer als de website al modern en professioneel is.
+OPGEHAALDE WEBSITE TEKST:
+${signals.text || '(website niet bereikbaar — geen tekst beschikbaar)'}
 
-Antwoord ALLEEN met dit JSON (geen markdown, geen uitleg):
-{"qualified":true,"score":7,"reason":"Korte reden in het Nederlands"}`
+Beoordeel op basis van de tekst:
+- Kwalificeer als score >= 7 (website ziet er verouderd/amateuristisch uit, goede kans op herontwerp)
+- Als er geen tekst beschikbaar is: score 5, qualified false
+- mobile_friendly: schat in of de tekst hints geeft op een mobiele site (responsive layout, viewport meta, etc.)
+- has_cta: is er een duidelijke CTA aanwezig in de tekst (offerte, bel, contact, boek, etc.)?
+- outdated_feel: ziet de site er verouderd/amateuristisch uit op basis van de tekst?
+
+VERPLICHT formaat — alleen dit JSON, niets anders:
+{"qualified":false,"score":5,"reason":"één zin in het Nederlands","mobile_friendly":true,"has_cta":false,"outdated_feel":false}`
 
   const response = await callClaude({
-    max_tokens: 200,
+    max_tokens: 300,
     messages: [{ role: 'user', content: prompt }],
   })
   const textBlock = response.content?.find((b: any) => b.type === 'text')
@@ -298,14 +358,33 @@ Antwoord ALLEEN met dit JSON (geen markdown, geen uitleg):
   if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
   const result = JSON.parse(jsonMatch[0])
 
+  // Build score breakdown
+  const breakdown: ScoreBreakdown = {
+    website_exists: signals.text.length > 50,
+    email_found: !!email,
+    phone_found: !!signals.phone,
+    mobile_friendly: result.mobile_friendly ?? true,
+    has_cta: result.has_cta ?? signals.has_cta,
+    outdated_feel: result.outdated_feel ?? false,
+    internal_link_count: signals.internal_link_count,
+  }
+  const { score: leadScore, hot_lead } = calculateLeadScore(breakdown)
+
   await supabase.from('leads').update({
     status: result.qualified ? 'qualified' : 'disqualified',
     qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
     email,
+    phone: signals.phone,
+    whatsapp_url: signals.whatsapp_url,
+    facebook_url: signals.facebook_url,
+    instagram_url: signals.instagram_url,
+    lead_score: leadScore,
+    hot_lead,
+    score_breakdown: breakdown,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
-  log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10)`)
+  log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10) lead_score=${leadScore}${hot_lead ? ' 🔥HOT' : ''}`)
   return result.qualified
 }
 
@@ -692,6 +771,153 @@ app.post('/run', async (req, res) => {
   })()
 })
 
+// ─── Generate email sequence (4 emails) ──────────────────────────────────────
+app.post('/generate-email-sequence/:id', async (req, res) => {
+  const { id } = req.params
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+
+  try {
+    const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
+    const issues: string[] = []
+    if (breakdown.outdated_feel) issues.push('de website heeft een verouderde uitstraling')
+    if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action zichtbaar')
+    if (!breakdown.mobile_friendly) issues.push('de mobiele versie voelt verouderd aan')
+    if (!breakdown.email_found && !lead.email) issues.push('contactgegevens zijn moeilijk te vinden')
+    const issueText = issues.slice(0, 2).join(' en ')
+
+    const shortName = (lead.company_name ?? '')
+      .split(/[|&·]/)[0].trim()
+      .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
+
+    const prompt = `Schrijf een e-mailreeks van 4 e-mails namens Ezra van Graphic Vision (webdesign bureau) voor dit lead:
+
+Bedrijf: ${lead.company_name}
+Niche: ${lead.niche}
+Stad: ${lead.city ?? 'onbekend'}
+Website issues: ${issueText || 'verouderde website'}
+Preview URL: ${lead.preview_url ?? '(nog niet beschikbaar)'}
+
+STRATEGIE:
+- Email 1: GEEN preview link, GEEN button. Pure tekst. Max 5 zinnen. Wek nieuwsgierigheid. Benoem 1-2 specifieke issues. Eindig met: "Wil je zien hoe het er beter uit kan zien?"
+- Email 2: 3 dagen later. Onthul nu de preview link. "Ik heb alvast iets voor je gemaakt..." — zet preview URL op eigen regel met "→ "
+- Email 3: 7 dagen na email 2. Korte herinnering. "Nog even dit..." — noem preview URL nogmaals
+- Email 4: 14 dagen na email 3. Sluit het dossier. "Ik sluit het bestand..." — bied nog één keer de preview aan
+
+Alle e-mails:
+- Begin met "Goedendag," of "Hey ${shortName},"
+- Sluit af met "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Geen bullet points, kort en persoonlijk
+- Alle tekst in het Nederlands
+
+Geef ALLEEN dit JSON terug, niets anders:
+{
+  "email1": {"subject": "...", "body": "..."},
+  "email2": {"subject": "...", "body": "..."},
+  "email3": {"subject": "...", "body": "..."},
+  "email4": {"subject": "...", "body": "..."}
+}`
+
+    const response = await callClaude({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+    const textBlock = response.content?.find((b: any) => b.type === 'text')
+    if (!textBlock) throw new Error('Geen response van Claude')
+    const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
+    const emails = JSON.parse(jsonMatch[0])
+
+    await supabase.from('leads').update({
+      email1_subject: emails.email1.subject, email1_body: emails.email1.body,
+      email2_subject: emails.email2.subject, email2_body: emails.email2.body,
+      email3_subject: emails.email3.subject, email3_body: emails.email3.body,
+      email4_subject: emails.email4.subject, email4_body: emails.email4.body,
+      // Backwards compat — email_subject/body maps to email1
+      email_subject: emails.email1.subject, email_body: emails.email1.body,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id)
+
+    log('Mail', `Sequentie gegenereerd voor ${lead.company_name}`)
+    res.json({ success: true, emails })
+  } catch (e) {
+    log('Mail', `Sequentie genereren mislukt: ${e}`)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+// ─── Generate A/B variants for email 1 ────────────────────────────────────────
+app.post('/generate-email-variants/:id', async (req, res) => {
+  const { id } = req.params
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+
+  try {
+    const prompt = `Schrijf 3 varianten van een eerste verkoop-e-mail namens Ezra van Graphic Vision voor:
+
+Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city ?? ''})
+
+Regels voor ALLE varianten:
+- GEEN preview link, GEEN button — pure tekst
+- Max 5 zinnen per e-mail
+- Eindig met: "Wil je zien hoe het er beter uit kan zien?"
+- Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Alle tekst in het Nederlands
+
+Variant A: directe, zakelijke toon
+Variant B: vriendelijke, persoonlijke toon
+Variant C: urgentie/competitie-invalshoek
+
+Geef ALLEEN dit JSON terug:
+[
+  {"label":"A","subject":"...","body":"..."},
+  {"label":"B","subject":"...","body":"..."},
+  {"label":"C","subject":"...","body":"..."}
+]`
+
+    const response = await callClaude({ max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
+    const textBlock = response.content?.find((b: any) => b.type === 'text')
+    if (!textBlock) throw new Error('Geen response van Claude')
+    const jsonMatch = textBlock.text.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
+    const variants = JSON.parse(jsonMatch[0])
+
+    await supabase.from('leads').update({ email_variants: variants, selected_variant: 0, updated_at: new Date().toISOString() }).eq('id', id)
+    log('Mail', `Varianten gegenereerd voor ${lead.company_name}`)
+    res.json({ success: true, variants })
+  } catch (e) {
+    log('Mail', `Varianten genereren mislukt: ${e}`)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+// ─── Select A/B variant ────────────────────────────────────────────────────────
+app.post('/select-email-variant/:id', async (req, res) => {
+  const { id } = req.params
+  const { variant } = req.body  // 0, 1, or 2 (index)
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+
+  const variants: any[] = lead.email_variants ?? []
+  const chosen = variants[variant]
+  if (!chosen) return res.status(400).json({ error: 'Variant niet gevonden' })
+
+  await supabase.from('leads').update({
+    selected_variant: variant,
+    email1_subject: chosen.subject, email1_body: chosen.body,
+    email_subject: chosen.subject, email_body: chosen.body,
+    updated_at: new Date().toISOString(),
+  }).eq('id', id)
+
+  res.json({ success: true })
+})
+
+// ─── Stop email sequence ───────────────────────────────────────────────────────
+app.post('/stop-sequence/:id', async (req, res) => {
+  const { id } = req.params
+  await supabase.from('leads').update({
+    sequence_stopped: true, next_followup_at: null, updated_at: new Date().toISOString(),
+  }).eq('id', id)
+  res.json({ success: true })
+})
+
 // ─── Send email ───────────────────────────────────────────────────────────────
 // ─── Generate email with Claude ───────────────────────────────────────────────
 app.post('/generate-email/:id', async (req, res) => {
@@ -901,9 +1127,27 @@ app.post('/send-email/:id', async (req, res) => {
       text: plainText,
     })
 
-    await supabase.from('leads').update({ status: 'sent', updated_at: new Date().toISOString() }).eq('id', id)
-    log('Mail', `Verzonden naar ${recipientEmail}`)
-    res.json({ success: true })
+    // Track sequence state
+    const seqIndex: number = lead.email_sequence_index ?? 0
+    const nextIndex = seqIndex + 1
+    const followupDelays: Record<number, number> = { 1: 3, 2: 7, 3: 14 }  // days after each email
+    const followupDays = followupDelays[nextIndex]
+    const next_followup_at = followupDays && nextIndex < 4
+      ? new Date(Date.now() + followupDays * 24 * 60 * 60 * 1000).toISOString()
+      : null
+
+    const sentAtField = `email${seqIndex + 1}_sent_at` as string
+    await supabase.from('leads').update({
+      status: 'sent',
+      crm_status: 'contacted',
+      email_sequence_index: nextIndex,
+      [sentAtField]: new Date().toISOString(),
+      next_followup_at,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id)
+
+    log('Mail', `Verzonden naar ${recipientEmail} (email ${seqIndex + 1}/4)${next_followup_at ? ` — volgende: ${next_followup_at.slice(0, 10)}` : ''}`)
+    res.json({ success: true, email_sequence_index: nextIndex, next_followup_at })
   } catch (e) {
     log('Mail', `Fout bij versturen naar ${lead.email}: ${e}`)
     res.status(500).json({ error: String(e) })
