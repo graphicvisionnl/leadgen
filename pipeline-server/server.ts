@@ -51,12 +51,20 @@ async function callClaude(params: {
       if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
       const data = await res.json()
       // kie.ai wraps errors in 200 responses with a code field
-      if (data.code && data.code !== 200) throw new Error(`kie.ai error: ${JSON.stringify(data)}`)
+      if (data.code && data.code !== 200) {
+        const isServerError = data.code === 500 || data.code === 502 || data.code === 503
+        if (isServerError && attempt < 3) {
+          log('Retry', `callClaude attempt ${attempt} — kie.ai ${data.code} serverfout, wacht 30s`)
+          await sleep(30_000)
+          continue
+        }
+        throw new Error(`kie.ai error: ${JSON.stringify(data)}`)
+      }
       return data
     } catch (e) {
       if (attempt === 3) throw e
-      log('Retry', `callClaude attempt ${attempt} mislukt: ${e} — wacht 15s`)
-      await sleep(15_000)
+      log('Retry', `callClaude attempt ${attempt} mislukt: ${e} — wacht 30s`)
+      await sleep(30_000)
     }
   }
   throw new Error('callClaude: alle pogingen mislukt')
@@ -75,8 +83,8 @@ async function callKieStreaming(params: {
       return await callKieStreamingOnce(params)
     } catch (e) {
       if (attempt === 3) throw e
-      log('Retry', `callKieStreaming attempt ${attempt} mislukt: ${e} — wacht 20s`)
-      await sleep(20_000)
+      log('Retry', `callKieStreaming attempt ${attempt} mislukt: ${e} — wacht 30s`)
+      await sleep(30_000)
     }
   }
   throw new Error('callKieStreaming: alle pogingen mislukt')
