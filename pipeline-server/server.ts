@@ -1126,12 +1126,12 @@ Geef ALLEEN dit JSON terug:
 }
 
 // ─── IMAP reply checker ───────────────────────────────────────────────────────
-async function checkReplies(): Promise<number> {
+async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
   const client = new ImapFlow({
     host: process.env.IMAP_HOST ?? 'imap.hostinger.com',
     port: parseInt(process.env.IMAP_PORT ?? '993'),
     secure: true,
-    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+    auth: { user: imapUser, pass: imapPass },
     logger: false,
   })
 
@@ -1141,7 +1141,6 @@ async function checkReplies(): Promise<number> {
   try {
     const lock = await client.getMailboxLock('INBOX')
     try {
-      // Search for unseen messages
       const uids = await client.search({ seen: false })
       if (!uids || !Array.isArray(uids) || uids.length === 0) return 0
 
@@ -1149,10 +1148,10 @@ async function checkReplies(): Promise<number> {
         const fromEmail = msg.envelope?.from?.[0]?.address?.toLowerCase()
         if (!fromEmail) continue
 
-        // Skip our own sent emails
-        if (fromEmail === process.env.SMTP_USER?.toLowerCase()) continue
+        // Skip any of our own sending accounts
+        if (fromEmail === imapUser.toLowerCase()) continue
 
-        // Match to a lead that has been emailed
+        // Match to a lead that was emailed from this account (or any if sent_from not set)
         const { data: lead } = await supabase
           .from('leads')
           .select('*')
@@ -1163,17 +1162,14 @@ async function checkReplies(): Promise<number> {
 
         if (!lead) continue
 
-        // Extract body text
         const bodyBuffer = msg.bodyParts?.get('1') ?? msg.bodyParts?.get('TEXT')
         const rawBody = bodyBuffer ? Buffer.from(bodyBuffer as any).toString('utf-8') : msg.envelope?.subject ?? ''
 
-        // Mark as seen
         await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true })
 
-        log('IMAP', `Reactie van ${lead.company_name} (${fromEmail})`)
+        log('IMAP', `Reactie van ${lead.company_name} (${fromEmail}) → inbox ${imapUser}`)
         found++
 
-        // Process async so we don't block the IMAP loop
         processReply(lead, rawBody).catch(e => log('IMAP', `processReply fout: ${e}`))
       }
     } finally {
@@ -1183,8 +1179,38 @@ async function checkReplies(): Promise<number> {
     await client.logout()
   }
 
-  log('IMAP', `Check klaar — ${found} nieuwe reactie(s)`)
   return found
+}
+
+async function checkReplies(): Promise<number> {
+  // Load all sending accounts from settings
+  const { data: settingsRows } = await supabase.from('settings').select('*')
+  const settings = Object.fromEntries(
+    (settingsRows ?? []).map((s: any) => [s.key, s.value])
+  )
+
+  let accounts: { email: string; pass: string }[] = []
+  try { accounts = JSON.parse(settings.smtp_accounts ?? '[]') } catch {}
+
+  // Always include the main env account if not already in the list
+  const mainUser = process.env.SMTP_USER!
+  if (mainUser && !accounts.find(a => a.email === mainUser)) {
+    accounts.push({ email: mainUser, pass: process.env.SMTP_PASS! })
+  }
+
+  let total = 0
+  for (const account of accounts) {
+    try {
+      const found = await checkInbox(account.email, account.pass)
+      total += found
+      log('IMAP', `${account.email}: ${found} reactie(s)`)
+    } catch (e) {
+      log('IMAP', `Fout bij ${account.email}: ${e}`)
+    }
+  }
+
+  log('IMAP', `Check klaar — ${total} nieuwe reactie(s) in ${accounts.length} inbox(en)`)
+  return total
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
