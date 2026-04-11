@@ -395,7 +395,7 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
 async function phase2(runId: string) {
   log('Phase 2', 'Email scrapen + kwalificeren')
   const { data: leads } = await supabase.from('leads').select('*')
-    .in('status', ['scraped', 'no_email']).not('website_url', 'is', null)
+    .in('status', ['scraped', 'no_email', 'error']).not('website_url', 'is', null)
 
   if (!leads?.length) { log('Phase 2', 'Geen leads'); return }
   log('Phase 2', `${leads.length} leads`)
