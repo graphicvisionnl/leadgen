@@ -4,10 +4,16 @@ import { useState, useEffect, KeyboardEvent } from 'react'
 
 type AutoMode = 'manual' | 'auto_draft' | 'auto_send'
 
+interface SmtpAccount {
+  email: string
+  pass: string
+}
+
 interface Settings {
   auto_mode: AutoMode
   cities_list: string[]
   niches_list: string[]
+  smtp_accounts: SmtpAccount[]
   max_leads: string
   email_signature: string
 }
@@ -16,6 +22,7 @@ const DEFAULT_SETTINGS: Settings = {
   auto_mode: 'manual',
   cities_list: [],
   niches_list: [],
+  smtp_accounts: [],
   max_leads: '30',
   email_signature: 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl',
 }
@@ -104,6 +111,43 @@ function TagInput({
   )
 }
 
+function AddAccountRow({ onAdd }: { onAdd: (acc: SmtpAccount) => void }) {
+  const [email, setEmail] = useState('')
+  const [pass, setPass] = useState('')
+
+  function add() {
+    if (!email.trim() || !pass.trim()) return
+    onAdd({ email: email.trim(), pass: pass.trim() })
+    setEmail('')
+    setPass('')
+  }
+
+  return (
+    <div className="flex gap-2 flex-wrap">
+      <input
+        type="email"
+        value={email}
+        onChange={e => setEmail(e.target.value)}
+        placeholder="e-mailadres"
+        className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 flex-1 min-w-[180px]"
+      />
+      <input
+        type="password"
+        value={pass}
+        onChange={e => setPass(e.target.value)}
+        placeholder="wachtwoord"
+        className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 flex-1 min-w-[140px]"
+      />
+      <button
+        onClick={add}
+        className="px-3 py-2 bg-white/8 border border-subtle rounded-lg text-sm text-white/60 hover:text-white transition-colors whitespace-nowrap"
+      >
+        + Toevoegen
+      </button>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [saving, setSaving] = useState(false)
@@ -117,6 +161,7 @@ export default function SettingsPage() {
           auto_mode: (data.auto_mode as AutoMode) ?? 'manual',
           cities_list: parseJsonArray(data.cities_list),
           niches_list: parseJsonArray(data.niches_list),
+          smtp_accounts: parseJsonArray(data.smtp_accounts) as unknown as SmtpAccount[],
           max_leads: data.max_leads ?? '30',
           email_signature: data.email_signature ?? DEFAULT_SETTINGS.email_signature,
         })
@@ -139,6 +184,7 @@ export default function SettingsPage() {
           auto_mode: settings.auto_mode,
           cities_list: JSON.stringify(settings.cities_list),
           niches_list: JSON.stringify(settings.niches_list),
+          smtp_accounts: JSON.stringify(settings.smtp_accounts),
           max_leads: settings.max_leads,
           email_signature: settings.email_signature,
         }),
@@ -222,6 +268,38 @@ export default function SettingsPage() {
             onChange={e => setSettings(s => ({ ...s, max_leads: e.target.value }))}
             className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20 w-24"
           />
+        </div>
+      </div>
+
+      {/* Sending accounts */}
+      <div className="bg-surface rounded-xl border border-subtle overflow-hidden">
+        <div className="p-5 border-b border-subtle">
+          <h2 className="font-semibold text-sm">Verzendaccounts</h2>
+          <p className="text-white/40 text-xs mt-1">
+            Per verstuurde mail wordt het volgende account gebruikt (rotatie). Naam wordt afgeleid van het e-mailadres.
+          </p>
+        </div>
+        <div className="divide-y divide-subtle">
+          {settings.smtp_accounts.map((acc, i) => (
+            <div key={i} className="p-4 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-white/8 border border-subtle flex items-center justify-center text-xs font-medium text-white/60">
+                {acc.email.split('@')[0].charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white/80 truncate">{acc.email}</p>
+                <p className="text-xs text-white/30">{'•'.repeat(Math.min(acc.pass.length, 12))}</p>
+              </div>
+              <button
+                onClick={() => setSettings(s => ({ ...s, smtp_accounts: s.smtp_accounts.filter((_, j) => j !== i) }))}
+                className="text-white/25 hover:text-red-400 transition-colors text-sm px-2"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <div className="p-4">
+            <AddAccountRow onAdd={acc => setSettings(s => ({ ...s, smtp_accounts: [...s.smtp_accounts, acc] }))} />
+          </div>
         </div>
       </div>
 

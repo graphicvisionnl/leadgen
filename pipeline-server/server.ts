@@ -835,11 +835,39 @@ Geef ALLEEN dit JSON terug, niets anders:
 }
 
 // Reusable: send a specific email number (1–4) for a lead
+// Pick next sending account from settings rotation, advance the index
+async function getNextSendAccount(settings: Record<string, string>): Promise<{ email: string; name: string; pass: string }> {
+  // Parse accounts list from settings, fallback to env SMTP
+  let accounts: { email: string; name?: string; pass?: string }[] = []
+  try { accounts = JSON.parse(settings.smtp_accounts ?? '[]') } catch {}
+
+  if (!accounts.length) {
+    // Fallback to single env-based account
+    const email = process.env.SMTP_USER!
+    const name = email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1)
+    return { email, name, pass: process.env.SMTP_PASS! }
+  }
+
+  const idx = parseInt(settings.smtp_account_index ?? '0') % accounts.length
+  const account = accounts[idx]
+  const nextIdx = (idx + 1) % accounts.length
+
+  // Advance rotation index
+  await supabase.from('settings').upsert(
+    [{ key: 'smtp_account_index', value: String(nextIdx) }],
+    { onConflict: 'key' }
+  )
+
+  const name = account.name ?? (account.email.split('@')[0].charAt(0).toUpperCase() + account.email.split('@')[0].slice(1))
+  const pass = account.pass ?? process.env.SMTP_PASS!
+  return { email: account.email, name, pass }
+}
+
 async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
   const subjectKey = `email${emailNumber}_subject` as const
   const bodyKey = `email${emailNumber}_body` as const
   const subject: string = lead[subjectKey] ?? lead.email_subject ?? ''
-  const body: string = lead[bodyKey] ?? lead.email_body ?? ''
+  let body: string = lead[bodyKey] ?? lead.email_body ?? ''
   if (!subject || !body || !lead.email) throw new Error('Ontbrekende email data')
 
   const { data: settingsRows } = await supabase.from('settings').select('*')
@@ -847,11 +875,26 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
   )
 
+  // Pick rotating send account
+  const account = await getNextSendAccount(settings)
+
+  // Strip any existing signature from body and append the correct one for this account
+  body = body
+    .replace(/\n+–\s*\w[^\n]*\nGraphic Vision[^\n]*/g, '')
+    .replace(/\n+Met vriendelijke groet[^\n]*\n[\s\S]*$/i, '')
+    .trimEnd()
+
+  const signature = emailNumber === 1
+    ? `\n\n– ${account.name}\nGraphic Vision`
+    : `\n\nMet vriendelijke groet,\n${account.name}\nGraphic Vision\ngraphicvision.nl`
+
+  body = body + signature
+
   const transport = nodemailer.createTransport({
     host: process.env.SMTP_HOST!,
     port: parseInt(process.env.SMTP_PORT ?? '465'),
     secure: process.env.SMTP_PORT !== '587',
-    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+    auth: { user: account.email, pass: account.pass },
   })
 
   // Email 1 = plain text only (best deliverability for cold outreach)
@@ -859,7 +902,7 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
   let mailOptions: any
   if (emailNumber === 1) {
     mailOptions = {
-      from: `Ezra <${process.env.SMTP_USER}>`,
+      from: `${account.name} <${account.email}>`,
       to: lead.email,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
@@ -881,11 +924,11 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
 <tr><td style="background:#0f0f0f;padding:28px 40px"><img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png" alt="Graphic Vision" width="160" style="display:block;height:auto"></td></tr>
 <tr><td style="padding:40px 40px 32px">${cleanBodyHtml}</td></tr>
-<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">Ezra — Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
+<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">${account.name} — Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
 </table></td></tr></table></body></html>`
 
     mailOptions = {
-      from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
+      from: `${account.name} — Graphic Vision <${account.email}>`,
       to: lead.email,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
