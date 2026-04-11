@@ -1166,9 +1166,14 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
     secure: true,
     auth: { user: imapUser, pass: imapPass },
     logger: false,
-    connectionTimeout: 10000,  // 10s connect timeout
-    greetingTimeout: 10000,
-    socketTimeout: 20000,
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
+  })
+
+  // Prevent unhandled error events from crashing the server
+  client.on('error', (err: Error) => {
+    log('IMAP', `Socket fout ${imapUser}: ${err.message}`)
   })
 
   await client.connect()
@@ -1763,6 +1768,13 @@ setInterval(() => {
 setTimeout(() => {
   sendDueFollowups().catch(e => log('Followup', `Startup check fout: ${e}`))
 }, 2 * 60 * 1000)
+
+process.on('uncaughtException', (err) => {
+  log('Server', `Uncaught exception (server blijft draaien): ${err.message}`)
+})
+process.on('unhandledRejection', (reason) => {
+  log('Server', `Unhandled rejection (server blijft draaien): ${reason}`)
+})
 
 const PORT = process.env.PORT ?? 3001
 app.listen(PORT, () => log('Server', `Draait op poort ${PORT}`))
