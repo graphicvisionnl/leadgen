@@ -13,6 +13,18 @@ interface Stats {
   due_followups: number
 }
 
+interface LastRun {
+  id: string
+  niche: string
+  city: string
+  status: 'running' | 'completed' | 'failed'
+  scraped_count: number | null
+  qualified_count: number | null
+  created_at: string
+  completed_at: string | null
+  error: string | null
+}
+
 const PHASES = [
   { key: 'phase1', label: 'Leads scrapen',       desc: 'Apify scraper',         color: 'text-blue-400' },
   { key: 'phase2', label: 'Kwalificeren',         desc: 'Haiku beoordeelt',      color: 'text-yellow-400' },
@@ -30,6 +42,7 @@ const NAV_CARDS = [
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats>({ scraped: 0, qualified: 0, deployed: 0, sent: 0, hot_leads: 0, due_followups: 0 })
+  const [lastRun, setLastRun] = useState<LastRun | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [niche, setNiche] = useState('')
   const [city, setCity] = useState('')
@@ -58,7 +71,10 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    Promise.all([fetchStats()])
+    Promise.all([
+      fetchStats(),
+      fetch('/api/pipeline/last-run').then(r => r.json()).then(data => setLastRun(data)).catch(() => null),
+    ])
       .then(() => {
         fetch('/api/settings').then(r => r.json()).then(data => {
           if (data.default_niche) setNiche(data.default_niche)
@@ -134,6 +150,34 @@ export default function Dashboard() {
       </div>
 
       <StatsCards stats={stats} />
+
+      {/* Last cron run */}
+      {lastRun && (
+        <div className="bg-surface rounded-xl border border-subtle p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          <div className="flex items-center gap-2">
+            {lastRun.status === 'running' ? (
+              <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+            ) : lastRun.status === 'failed' ? (
+              <span className="w-2 h-2 rounded-full bg-red-400" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-green-400" />
+            )}
+            <span className="font-medium text-white/80">Laatste run</span>
+          </div>
+          <span className="text-white/50">
+            {lastRun.niche} · {lastRun.city}
+          </span>
+          {lastRun.scraped_count != null && (
+            <span className="text-white/40 text-xs">{lastRun.scraped_count} gescraped · {lastRun.qualified_count ?? 0} gekwalificeerd</span>
+          )}
+          {lastRun.status === 'failed' && lastRun.error && (
+            <span className="text-red-400 text-xs truncate max-w-[200px]" title={lastRun.error}>{lastRun.error}</span>
+          )}
+          <span className="text-white/30 text-xs ml-auto">
+            {new Date(lastRun.completed_at ?? lastRun.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+      )}
 
       {/* Quick nav cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
