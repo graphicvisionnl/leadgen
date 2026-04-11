@@ -580,15 +580,23 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                     </div>
                   )}
 
-                  <div>
-                    <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
-                    <input
-                      type="text"
-                      value={email.subject}
-                      onChange={e => setEmailFields(f => ({ ...f, [subjectKey]: e.target.value }))}
-                      className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
-                    />
-                  </div>
+                  {activeEmailTab !== 1 && (
+                    <div>
+                      <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
+                      <input
+                        type="text"
+                        value={email.subject}
+                        onChange={e => setEmailFields(f => ({ ...f, [subjectKey]: e.target.value }))}
+                        className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+                      />
+                    </div>
+                  )}
+                  {activeEmailTab === 1 && (
+                    <div>
+                      <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
+                      <p className="text-sm text-white/40 italic">Re: {lead.email1_subject ?? lead.email_subject ?? '…'}</p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs text-white/40 mb-1.5">Bericht</label>
                     <textarea
