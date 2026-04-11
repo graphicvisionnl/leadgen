@@ -905,8 +905,8 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
 
   // Strip any existing signature from body and append clean one
   body = body
-    .replace(/\n+–\s*[^\n]*\n?Graphic Vision[^\n]*/g, '')
-    .replace(/\n+Met vriendelijke groet[^\n]*\n[\s\S]*$/i, '')
+    .replace(/\n+–[\s\S]*$/, '')             // strips – Name (and anything after, e.g. Graphic Vision)
+    .replace(/\n+Met vriendelijke groet[\s\S]*$/i, '')
     .trimEnd()
 
   const signature = emailNumber === 1
