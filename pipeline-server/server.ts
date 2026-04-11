@@ -1166,6 +1166,9 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
     secure: true,
     auth: { user: imapUser, pass: imapPass },
     logger: false,
+    connectionTimeout: 10000,  // 10s connect timeout
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
   })
 
   await client.connect()
@@ -1216,6 +1219,7 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
 }
 
 async function checkReplies(): Promise<number> {
+  log('IMAP', 'Check gestart')
   // Load all sending accounts from settings
   const { data: settingsRows } = await supabase.from('settings').select('*')
   const settings = Object.fromEntries(
