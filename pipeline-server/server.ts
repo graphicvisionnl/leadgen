@@ -854,17 +854,28 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
   })
 
-  // Build plain HTML (no CTA button for email 1 — no preview URL yet)
-  const previewUrl = emailNumber > 1 ? lead.preview_url : null
-  const cleanBodyHtml = body.split('\n\n').filter(p => p.trim()).map(para => {
-    if (previewUrl && para.includes(previewUrl)) {
-      return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px"><tr><td><a href="${previewUrl}" target="_blank" style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px">Bekijk jouw nieuwe website →</a></td></tr></table>`
+  // Email 1 = plain text only (best deliverability for cold outreach)
+  // Email 2+ = branded HTML template
+  let mailOptions: any
+  if (emailNumber === 1) {
+    mailOptions = {
+      from: `Ezra <${process.env.SMTP_USER}>`,
+      to: lead.email,
+      bcc: 'graphicvisionnl@gmail.com',
+      subject,
+      text: body,
     }
-    const escaped = para.split('\n').map((l: string) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).join('<br>')
-    return `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
-  }).join('')
+  } else {
+    const previewUrl = lead.preview_url ?? null
+    const cleanBodyHtml = body.split('\n\n').filter((p: string) => p.trim()).map((para: string) => {
+      if (previewUrl && para.includes(previewUrl)) {
+        return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px"><tr><td><a href="${previewUrl}" target="_blank" style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px">Bekijk jouw nieuwe website →</a></td></tr></table>`
+      }
+      const escaped = para.split('\n').map((l: string) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).join('<br>')
+      return `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
+    }).join('')
 
-  const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"></head>
+    const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 0"><tr><td align="center">
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
@@ -873,14 +884,17 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
 <tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">Ezra — Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
 </table></td></tr></table></body></html>`
 
-  await transport.sendMail({
-    from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
-    to: lead.email,
-    bcc: 'graphicvisionnl@gmail.com',
-    subject,
-    html,
-    text: body,
-  })
+    mailOptions = {
+      from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
+      to: lead.email,
+      bcc: 'graphicvisionnl@gmail.com',
+      subject,
+      html,
+      text: body,
+    }
+  }
+
+  await transport.sendMail(mailOptions)
 
   const seqIndex = emailNumber - 1
   const followupDelays: Record<number, number> = { 1: 1, 2: 3, 3: 6 }
