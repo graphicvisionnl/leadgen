@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",
-    "dev": "ts-node --project tsconfig.json server.ts"
+    "dev": "ts-node --project tsconfig.json server.ts",
+    "deploy": "git pull && npm run build && pm2 restart pipeline-server"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
