@@ -777,12 +777,14 @@ async function generateEmailSequenceForLead(lead: any) {
   })()
   const greeting = firstName ? `Hey ${firstName},` : 'Hey,'
 
-  const prompt = `Je schrijft een koude outreach e-mailreeks namens Ezra van Graphic Vision voor dit bedrijf:
+  const prompt = `Je schrijft een koude outreach e-mailreeks namens Graphic Vision voor dit bedrijf:
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
 Problemen op hun site: ${issueText}
+
+OPMAAK (verplicht voor alle mails): gebruik lege regels tussen alinea's. Plain text stijl.
 
 MAIL 1 — OUTREACH MAIL (dag 0)
 Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
@@ -790,8 +792,8 @@ Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen
 - Zeg dat je ze vond via Google Maps
 - Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
 - Zeg dat je een quick redesign hebt gemaakt
-- Eindig met: "Wil je dat ik het stuur?" of vergelijkbare korte nieuwsgierige CTA
-- Afsluiting EXACT: "– Ezra\nGraphic Vision"
+- Lege regel, dan EXACT: "Wil je dat ik het stuur?" (of vergelijkbare korte nieuwsgierige CTA)
+- Afsluiting EXACT: "– Graphic Vision"
 - GEEN "Met vriendelijke groet", GEEN lange afsluiting
 - Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
 
@@ -803,13 +805,13 @@ MAIL 3 — HERINNERING 1 (dag 3)
 - Super kort — max 2-3 zinnen
 - Verwijs terug naar mail 1, vraag of ze het gemist hebben
 - GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Ezra"
+- Afsluiting EXACT: "– Graphic Vision"
 
 MAIL 4 — HERINNERING 2 (dag 6)
 - Begin met "${greeting}"
 - Sluit het dossier af — "Ik sluit het bestand van jullie" — kort en vriendelijk
 - GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Ezra"
+- Afsluiting EXACT: "– Graphic Vision"
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
@@ -863,6 +865,29 @@ async function getNextSendAccount(settings: Record<string, string>): Promise<{ e
   return { email: account.email, name, pass }
 }
 
+async function sendRunNotification(stats: { niche: string; city: string; scraped: number; qualified: number; emailed: number; mode: string; failed: boolean; error?: string }) {
+  const transport = nodemailer.createTransport({
+    host: process.env.SMTP_HOST!,
+    port: parseInt(process.env.SMTP_PORT ?? '465'),
+    secure: process.env.SMTP_PORT !== '587',
+    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+  })
+
+  const status = stats.failed ? '❌ Mislukt' : '✅ Voltooid'
+  const subject = `${status} — Pipeline run: ${stats.niche} in ${stats.city}`
+
+  const body = stats.failed
+    ? `De dagelijkse pipeline run is mislukt.\n\nNiche: ${stats.niche}\nStad: ${stats.city}\nFout: ${stats.error ?? 'Onbekend'}\n\nBekijk de logs: https://leadgen.graphicvision.nl`
+    : `De dagelijkse pipeline run is voltooid.\n\nNiche: ${stats.niche}\nStad: ${stats.city}\nModus: ${stats.mode === 'send' ? 'Auto + Verstuur' : 'Auto + Concept'}\n\nResultaten:\n• Gescraped: ${stats.scraped}\n• Gekwalificeerd: ${stats.qualified}\n• E-mails ${stats.mode === 'send' ? 'verstuurd' : 'als concept klaar'}: ${stats.emailed}\n\nBekijk de leads: https://leadgen.graphicvision.nl`
+
+  await transport.sendMail({
+    from: `Graphic Vision Pipeline <${process.env.SMTP_USER}>`,
+    to: 'graphicvisionnl@gmail.com',
+    subject,
+    text: body,
+  }).catch(e => log('Notify', `Email notificatie mislukt: ${e}`))
+}
+
 async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
   const subjectKey = `email${emailNumber}_subject` as const
   const bodyKey = `email${emailNumber}_body` as const
@@ -878,15 +903,15 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
   // Pick rotating send account
   const account = await getNextSendAccount(settings)
 
-  // Strip any existing signature from body and append the correct one for this account
+  // Strip any existing signature from body and append clean one
   body = body
-    .replace(/\n+–\s*\w[^\n]*\nGraphic Vision[^\n]*/g, '')
+    .replace(/\n+–\s*[^\n]*\n?Graphic Vision[^\n]*/g, '')
     .replace(/\n+Met vriendelijke groet[^\n]*\n[\s\S]*$/i, '')
     .trimEnd()
 
   const signature = emailNumber === 1
-    ? `\n\n– ${account.name}\nGraphic Vision`
-    : `\n\nMet vriendelijke groet,\n${account.name}\nGraphic Vision\ngraphicvision.nl`
+    ? `\n\n– Graphic Vision`
+    : `\n\nMet vriendelijke groet,\nGraphic Vision\ngraphicvision.nl`
 
   body = body + signature
 
@@ -924,7 +949,7 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
 <tr><td style="background:#0f0f0f;padding:28px 40px"><img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png" alt="Graphic Vision" width="160" style="display:block;height:auto"></td></tr>
 <tr><td style="padding:40px 40px 32px">${cleanBodyHtml}</td></tr>
-<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">${account.name} — Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
+<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
 </table></td></tr></table></body></html>`
 
     mailOptions = {
@@ -1086,7 +1111,7 @@ async function generateEmail2Draft(lead: any, replyText: string, classification:
   const shortName = (lead.company_name ?? '').split(/[|&·]/)[0].trim()
     .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
 
-  const prompt = `Schrijf een persoonlijke e-mailreactie namens Ezra van Graphic Vision.
+  const prompt = `Schrijf een persoonlijke e-mailreactie namens Graphic Vision.
 
 Context:
 - Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city ?? ''})
@@ -1106,7 +1131,7 @@ Regels:
 - Zet de preview URL op een eigen regel met "→ "
 - Voeg toe: "Dit is nog niet definitief — alles kan worden aangepast aan jullie wensen."
 - Sluit af met uitnodiging voor een kort gesprek
-- Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Afsluiting: "Met vriendelijke groet,\nGraphic Vision\ngraphicvision.nl"
 - Max 6 zinnen, geen bullet points, persoonlijk
 
 Geef ALLEEN dit JSON terug:
@@ -1299,10 +1324,10 @@ app.post('/run', async (req, res) => {
   // Redesign only happens AFTER a lead replies (triggered by /on-reply/:id)
   ;(async () => {
     try {
-      await phase1(run!.id, niche, city, maxLeads)
+      const scraped = await phase1(run!.id, niche, city, maxLeads)
       await phase2(run!.id)
 
-      // Generate email sequence for all qualified leads with email
+      // Count qualified leads for this run
       const { data: qualifiedLeads } = await supabase
         .from('leads').select('*').eq('status', 'qualified').not('email', 'is', null)
         .eq('pipeline_run_id', run!.id)
@@ -1321,16 +1346,21 @@ app.post('/run', async (req, res) => {
         }
       }
 
+      const qualified = qualifiedLeads?.length ?? 0
       const summary = mode === 'send'
         ? `${emailed} emails verstuurd, wacht op reacties`
-        : `${qualifiedLeads?.length ?? 0} sequenties gegenereerd (draft mode — niet verstuurd)`
+        : `${qualified} sequenties gegenereerd (draft mode — niet verstuurd)`
       log('Pipeline', `Run ${run!.id} voltooid — ${summary}`)
       await supabase.from('pipeline_runs').update({
         status: 'completed', completed_at: new Date().toISOString(),
       }).eq('id', run!.id)
+
+      // Send summary notification
+      await sendRunNotification({ niche, city, scraped: scraped ?? 0, qualified, emailed, mode, failed: false })
     } catch (e) {
       log('Pipeline', `Run ${run!.id} mislukt: ${e}`)
       await supabase.from('pipeline_runs').update({ status: 'failed', error: String(e) }).eq('id', run!.id)
+      await sendRunNotification({ niche, city, scraped: 0, qualified: 0, emailed: 0, mode, failed: true, error: String(e) })
     }
   })()
 })
@@ -1401,12 +1431,14 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
     })()
     const greeting2 = firstName2 ? `Hey ${firstName2},` : 'Hey,'
 
-    const prompt = `Je schrijft een koude outreach e-mailreeks namens Ezra van Graphic Vision voor dit bedrijf:
+    const prompt = `Je schrijft een koude outreach e-mailreeks namens Graphic Vision voor dit bedrijf:
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
 Problemen op hun site: ${issueText}
+
+OPMAAK (verplicht voor alle mails): gebruik lege regels tussen alinea's. Plain text stijl.
 
 MAIL 1 — OUTREACH MAIL (dag 0)
 Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
@@ -1414,8 +1446,8 @@ Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen
 - Zeg dat je ze vond via Google Maps
 - Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
 - Zeg dat je een quick redesign hebt gemaakt
-- Eindig met: "Wil je dat ik het stuur?" of vergelijkbare korte nieuwsgierige CTA
-- Afsluiting EXACT: "– Ezra\nGraphic Vision"
+- Lege regel, dan EXACT: "Wil je dat ik het stuur?" (of vergelijkbare korte nieuwsgierige CTA)
+- Afsluiting EXACT: "– Graphic Vision"
 - GEEN "Met vriendelijke groet", GEEN lange afsluiting
 - Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
 
@@ -1427,13 +1459,13 @@ MAIL 3 — HERINNERING 1 (dag 3)
 - Super kort — max 2-3 zinnen
 - Verwijs terug naar mail 1, vraag of ze het gemist hebben
 - GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Ezra"
+- Afsluiting EXACT: "– Graphic Vision"
 
 MAIL 4 — HERINNERING 2 (dag 6)
 - Begin met "${greeting2}"
 - Sluit het dossier af — kort en vriendelijk
 - GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Ezra"
+- Afsluiting EXACT: "– Graphic Vision"
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
@@ -1480,7 +1512,7 @@ app.post('/generate-email-variants/:id', async (req, res) => {
     if (!breakdown2.mobile_friendly) variantIssues.push('slechte mobiele versie')
     const variantIssueText = variantIssues.slice(0, 2).join(' en ') || 'verouderde website'
 
-    const prompt = `Schrijf 3 varianten van een eerste verkoop-e-mail namens Ezra van Graphic Vision voor:
+    const prompt = `Schrijf 3 varianten van een eerste verkoop-e-mail namens Graphic Vision voor:
 
 Bedrijf: ${lead.company_name} (${lead.niche}, ${lead.city ?? ''})
 Specifieke website-issues: ${variantIssueText}
@@ -1492,7 +1524,7 @@ STRENGE REGELS VOOR ALLE VARIANTEN:
 - Koppel elk probleem aan het gevolg voor hun bedrijf (bezoekers die afhaken, minder bellers, geen vertrouwen)
 - Geef aan dat dit opgelost is — zonder te onthullen hoe of wat
 - Eindig met een curiosity-gebaseerde CTA (varieer de formulering per variant)
-- Afsluiting: "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
+- Afsluiting: "Met vriendelijke groet,\nGraphic Vision\ngraphicvision.nl"
 - Alle tekst in het Nederlands
 
 Variant A: direct en zakelijk — to the point, geen smalltalk
@@ -1590,7 +1622,7 @@ app.post('/generate-email/:id', async (req, res) => {
       ? `Snel iets voor je gemaakt, ${firstName}`
       : genericSubjects[0]
 
-    const prompt = `Schrijf een overtuigende Nederlandse verkoop-e-mail namens Ezra van Graphic Vision.
+    const prompt = `Schrijf een overtuigende Nederlandse verkoop-e-mail namens Graphic Vision.
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}${lead.city ? `\nStad: ${lead.city}` : ''}
@@ -1727,7 +1759,7 @@ app.post('/send-email/:id', async (req, res) => {
                   </td>
                   <td style="border-left:2px solid #e8e8e8;padding-left:16px;vertical-align:middle">
                     <p style="margin:0;font-size:13px;color:#888;line-height:1.6">
-                      Ezra — Graphic Vision<br>
+                      Graphic Vision<br>
                       <a href="https://graphicvision.nl" style="color:#FF794F;text-decoration:none">graphicvision.nl</a>
                     </p>
                   </td>
@@ -1749,7 +1781,7 @@ app.post('/send-email/:id', async (req, res) => {
 </html>`
 
     await transport.sendMail({
-      from: `Ezra — Graphic Vision <${process.env.SMTP_USER}>`,
+      from: `Graphic Vision <${process.env.SMTP_USER}>`,
       to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
       subject: finalSubject ?? defaultSubject,
