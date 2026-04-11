@@ -75,7 +75,7 @@ function ReplyPanel({ lead, onTriggered }: { lead: Lead; onTriggered: () => void
 
       {lead.email2_draft_ready && (
         <p className="text-xs text-green-400 flex items-center gap-1.5">
-          <span>✓</span> Email 2 concept klaar — zie de sequentie hieronder
+          <span>✓</span> Reactie mail concept klaar — zie de sequentie hieronder
         </p>
       )}
 
@@ -509,20 +509,16 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
 
         {!emails[0].subject && !generatingSequence ? (
           <div className="py-8 text-center">
-            <p className="text-white/30 text-sm mb-4">
-              {lead.preview_url ? 'Genereer 4 gepersonaliseerde e-mails gebaseerd op de lead.' : 'Deploy eerst een preview voordat je e-mails kunt genereren.'}
-            </p>
-            {lead.preview_url && (
-              <button onClick={generateSequence}
-                className="px-5 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors">
-                ✦ Genereer sequentie
-              </button>
-            )}
+            <p className="text-white/30 text-sm mb-4">Genereer de 4-mail reeks: Outreach → Reactie (placeholder) → Herinnering 1 → Herinnering 2</p>
+            <button onClick={generateSequence}
+              className="px-5 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors">
+              ✦ Genereer sequentie
+            </button>
           </div>
         ) : generatingSequence ? (
           <div className="py-8 text-center">
             <span className="w-5 h-5 border-2 border-white/20 border-t-brand rounded-full animate-spin inline-block mb-3" />
-            <p className="text-white/30 text-sm">Sequentie genereren met Claude…</p>
+            <p className="text-white/30 text-sm">Sequentie genereren met Gemini…</p>
           </div>
         ) : (
           <>
@@ -536,7 +532,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                     activeEmailTab === i ? 'text-white bg-white/5' : 'text-white/40 hover:text-white/70'
                   }`}
                 >
-                  Email {i + 1}
+                  {['Outreach', 'Reactie', 'Herinnering 1', 'Herinnering 2'][i]}
                   {e.sentAt && (
                     <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
                   )}

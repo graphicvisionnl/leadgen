@@ -766,45 +766,55 @@ async function generateEmailSequenceForLead(lead: any) {
   const shortName = (lead.company_name ?? '').split(/[|&·]/)[0].trim()
     .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
 
-  const prompt = `Schrijf een e-mailreeks van 4 e-mails namens Ezra van Graphic Vision (webdesign bureau) voor dit lead:
+  const emailPrefix = (lead.email ?? '').split('@')[0].toLowerCase()
+  const genericPrefixes = ['info', 'contact', 'hello', 'hallo', 'mail', 'post', 'office', 'admin', 'support', 'service', 'team', 'sales', 'marketing', 'hoi', 'algemeen', 'receptie', 'secretariaat', 'welkom', 'webmaster']
+  const isGeneric = !lead.email || genericPrefixes.some((p: string) => emailPrefix === p || emailPrefix.startsWith(p + '.'))
+  const firstName = isGeneric ? null : (() => {
+    const namePart = emailPrefix.split(/[._-]/)[0]
+    return (namePart && namePart.length > 1 && /^[a-z]/i.test(namePart))
+      ? namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase()
+      : null
+  })()
+  const greeting = firstName ? `Hey ${firstName},` : 'Hey,'
+
+  const prompt = `Je schrijft een koude outreach e-mailreeks namens Ezra van Graphic Vision voor dit bedrijf:
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
-Wat er mis is: ${issueText}
-Wat verbeterd is in het redesign: ${improvementText}
-Preview URL: wordt later toegevoegd in email 2–4
+Problemen op hun site: ${issueText}
 
-TIMING:
-- Email 1: Dag 0
-- Email 2: Dag 1
-- Email 3: Dag 3
-- Email 4: Dag 5–7
+MAIL 1 — OUTREACH MAIL (dag 0)
+Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
+- Begin EXACT met: "${greeting}"
+- Zeg dat je ze vond via Google Maps
+- Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
+- Zeg dat je een quick redesign hebt gemaakt
+- Eindig met: "Wil je dat ik het stuur?" of vergelijkbare korte nieuwsgierige CTA
+- Afsluiting EXACT: "– Ezra\nGraphic Vision"
+- GEEN "Met vriendelijke groet", GEEN lange afsluiting
+- Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
 
-STRATEGIE PER EMAIL:
+MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
+Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
 
-Email 1 — GEEN preview link, GEEN button, GEEN afbeeldingen. Pure tekst. Max 5 zinnen.
-- Leg uit WAAROM de huidige website niet werkt. Gebruik max 2 concrete problemen: ${issueText}
-- Koppel elk probleem aan het gevolg voor hun bedrijf (bezoekers haken af, minder bellers, geen vertrouwen)
-- Geef aan dat wij dit hebben opgelost — zonder te onthullen HOE of WAT
-- Eindig met een curiosity-gebaseerde CTA, bijv. "Wil je zien hoe het er beter uit kan zien?"
-- Toon: direct, geen verkooppraatje — gewoon iemand die een probleem benoemt dat hij herkent
+MAIL 3 — HERINNERING 1 (dag 3)
+- Begin met "${greeting}"
+- Super kort — max 2-3 zinnen
+- Verwijs terug naar mail 1, vraag of ze het gemist hebben
+- GEEN links, GEEN preview URL
+- Afsluiting EXACT: "– Ezra"
 
-Email 2 — wordt gegenereerd na een reactie van de lead (PLACEHOLDER — schrijf een placeholder "Email 2 volgt na reactie")
-Email 3 — Korte follow-up: "Nog even dit..." — max 3 zinnen, geen URL (wordt later ingevuld)
-Email 4 — Sluit het dossier: "Ik sluit het bestand..." — max 3 zinnen, geen URL (wordt later ingevuld)
-
-REGELS VOOR ALLE EMAILS:
-- Begin met "Goedendag," of "Hey ${shortName},"
-- Sluit af met "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
-- Geen bullet points, kort en persoonlijk
-- Alle tekst in het Nederlands
-- Email 1 bevat ABSOLUUT GEEN links of URLs
+MAIL 4 — HERINNERING 2 (dag 6)
+- Begin met "${greeting}"
+- Sluit het dossier af — "Ik sluit het bestand van jullie" — kort en vriendelijk
+- GEEN links, GEEN preview URL
+- Afsluiting EXACT: "– Ezra"
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
   "email1": {"subject": "...", "body": "..."},
-  "email2": {"subject": "Concept klaar", "body": "Email 2 volgt na reactie"},
+  "email2": {"subject": "Reactie", "body": "[Wordt gegenereerd na reactie van de lead]"},
   "email3": {"subject": "...", "body": "..."},
   "email4": {"subject": "...", "body": "..."}
 }`
@@ -1297,60 +1307,55 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
     if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
     const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
 
-    const shortName = (lead.company_name ?? '')
-      .split(/[|&·]/)[0].trim()
-      .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
+    const emailPrefix2 = (lead.email ?? '').split('@')[0].toLowerCase()
+    const genericPrefixes2 = ['info', 'contact', 'hello', 'hallo', 'mail', 'post', 'office', 'admin', 'support', 'service', 'team', 'sales', 'marketing', 'hoi', 'algemeen', 'receptie', 'secretariaat', 'welkom', 'webmaster']
+    const isGeneric2 = !lead.email || genericPrefixes2.some((p: string) => emailPrefix2 === p || emailPrefix2.startsWith(p + '.'))
+    const firstName2 = isGeneric2 ? null : (() => {
+      const namePart = emailPrefix2.split(/[._-]/)[0]
+      return (namePart && namePart.length > 1 && /^[a-z]/i.test(namePart))
+        ? namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase()
+        : null
+    })()
+    const greeting2 = firstName2 ? `Hey ${firstName2},` : 'Hey,'
 
-    const prompt = `Schrijf een e-mailreeks van 4 e-mails namens Ezra van Graphic Vision (webdesign bureau) voor dit lead:
+    const prompt = `Je schrijft een koude outreach e-mailreeks namens Ezra van Graphic Vision voor dit bedrijf:
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
-Wat er mis is: ${issueText}
-Wat verbeterd is in het redesign: ${improvementText}
-Preview URL: ${lead.preview_url}
+Problemen op hun site: ${issueText}
 
-TIMING:
-- Email 1: Dag 0
-- Email 2: Dag 1 (volgende dag)
-- Email 3: Dag 3
-- Email 4: Dag 5–7
+MAIL 1 — OUTREACH MAIL (dag 0)
+Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
+- Begin EXACT met: "${greeting2}"
+- Zeg dat je ze vond via Google Maps
+- Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
+- Zeg dat je een quick redesign hebt gemaakt
+- Eindig met: "Wil je dat ik het stuur?" of vergelijkbare korte nieuwsgierige CTA
+- Afsluiting EXACT: "– Ezra\nGraphic Vision"
+- GEEN "Met vriendelijke groet", GEEN lange afsluiting
+- Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
 
-STRATEGIE PER EMAIL:
+MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
+Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
 
-Email 1 — GEEN preview link, GEEN button, GEEN afbeeldingen. Pure tekst. Max 5 zinnen.
-- Leg uit WAAROM de huidige website niet werkt. Gebruik max 2 concrete problemen: ${issueText}
-- Koppel elk probleem aan het gevolg voor hun bedrijf (bijv. bezoekers haken af, minder bellers, geen vertrouwen)
-- Geef aan dat wij dit hebben opgelost — zonder te onthullen HOE of WAT
-- Eindig met een curiosity-gebaseerde CTA, bijv. "Wil je zien hoe het er beter uit kan zien?"
-- Toon: direct, geen verkooppraatje — gewoon iemand die een probleem benoemt dat hij herkent
+MAIL 3 — HERINNERING 1 (dag 3)
+- Begin met "${greeting2}"
+- Super kort — max 2-3 zinnen
+- Verwijs terug naar mail 1, vraag of ze het gemist hebben
+- GEEN links, GEEN preview URL
+- Afsluiting EXACT: "– Ezra"
 
-Email 2 — Onthul de preview. Noem CONCREET wat verbeterd is: ${improvementText}
-- Open met "Ik heb alvast iets voor je gemaakt..."
-- Zet de preview URL op een eigen regel, voorafgegaan door "→ "
-- Kort en persoonlijk, max 4 zinnen
-
-Email 3 — Korte follow-up herinnering
-- Open met "Nog even dit..."
-- Noem de preview URL nogmaals met "→ "
-- Max 3 zinnen
-
-Email 4 — Sluit het dossier
-- Open met "Ik sluit het bestand..."
-- Bied de preview nog één keer aan met "→ "
-- Vriendelijk en zonder druk, max 3 zinnen
-
-REGELS VOOR ALLE EMAILS:
-- Begin met "Goedendag," of "Hey ${shortName},"
-- Sluit af met "Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl"
-- Geen bullet points, kort en persoonlijk
-- Alle tekst in het Nederlands
-- Email 1 bevat ABSOLUUT GEEN links of URLs
+MAIL 4 — HERINNERING 2 (dag 6)
+- Begin met "${greeting2}"
+- Sluit het dossier af — kort en vriendelijk
+- GEEN links, GEEN preview URL
+- Afsluiting EXACT: "– Ezra"
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
   "email1": {"subject": "...", "body": "..."},
-  "email2": {"subject": "...", "body": "..."},
+  "email2": {"subject": "Reactie", "body": "[Wordt gegenereerd na reactie van de lead]"},
   "email3": {"subject": "...", "body": "..."},
   "email4": {"subject": "...", "body": "..."}
 }`
