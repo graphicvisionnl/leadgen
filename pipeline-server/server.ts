@@ -26,14 +26,59 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// ─── kie.ai Haiku helper (qualify + email — fast & cheap) ────────────────────
+// ─── Gemini 2.5 Flash helper (qualify + email — cheap & reliable) ────────────
+async function callGemini(params: {
+  system?: string
+  messages: { role: 'user' | 'assistant'; content: string }[]
+  max_tokens: number
+}): Promise<string> {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${process.env.KIE_API_KEY}`,
+    'Content-Type': 'application/json',
+  }
+
+  // Prepend system prompt as first user message if provided
+  const messages = params.system
+    ? [{ role: 'user' as const, content: params.system }, { role: 'assistant' as const, content: 'Begrepen.' }, ...params.messages]
+    : params.messages
+
+  const body = {
+    model: 'gemini-2.5-flash',
+    messages,
+    stream: false,
+    max_tokens: params.max_tokens,
+    include_thoughts: false,
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch('https://api.kie.ai/gemini-2.5-flash/v1/chat/completions', {
+        method: 'POST', headers, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`)
+      const data = await res.json()
+      if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`)
+      const text = data.choices?.[0]?.message?.content
+      if (!text) throw new Error(`Gemini: geen content in response`)
+      return text
+    } catch (e) {
+      if (attempt === 3) throw e
+      log('Retry', `callGemini attempt ${attempt} mislukt: ${e} — wacht 30s`)
+      await sleep(30_000)
+    }
+  }
+  throw new Error('callGemini: alle pogingen mislukt')
+}
+
+// ─── kie.ai Claude helper (kept for HTML redesign fallback) ──────────────────
 async function callClaude(params: {
   model?: string
   system?: string
   messages: any[]
   max_tokens: number
 }): Promise<{ content: any[]; stop_reason: string; usage: any }> {
-  const model = params.model ?? 'claude-haiku-4-5'
+  const model = params.model ?? 'claude-sonnet-4-6'
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${process.env.KIE_API_KEY}`,
     'Content-Type': 'application/json',
@@ -50,7 +95,6 @@ async function callClaude(params: {
       })
       if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
       const data = await res.json()
-      // kie.ai wraps errors in 200 responses with a code field
       if (data.code && data.code !== 200) {
         const isServerError = data.code === 500 || data.code === 502 || data.code === 503
         if (isServerError && attempt < 3) {
@@ -360,14 +404,12 @@ KWALIFICATIEREGELS — wees RUIMHARTIG, standaard is qualified=true:
 VERPLICHT formaat — alleen dit JSON, niets anders:
 {"qualified":true,"score":7,"reason":"één zin in het Nederlands","mobile_friendly":false,"has_cta":false,"outdated_feel":true}`
 
-  const response = await callClaude({
+  const text = await callGemini({
     max_tokens: 300,
     messages: [{ role: 'user', content: prompt }],
   })
-  const textBlock = response.content?.find((b: any) => b.type === 'text')
-  if (!textBlock) throw new Error(`Geen text in response: ${JSON.stringify(response).slice(0, 200)}`)
-  const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
   const result = JSON.parse(jsonMatch[0])
 
   // Build score breakdown
@@ -767,9 +809,8 @@ Geef ALLEEN dit JSON terug, niets anders:
   "email4": {"subject": "...", "body": "..."}
 }`
 
-  const response = await callClaude({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
-  const textBlock = response.content?.find((b: any) => b.type === 'text')
-  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  const seqText = await callGemini({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+  const jsonMatch = seqText.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Geen JSON in sequence response')
   const emails = JSON.parse(jsonMatch[0])
 
@@ -874,9 +915,8 @@ Kies EXACT één van deze categorieën:
 Geef ALLEEN dit JSON terug:
 {"classification":"interested","summary":"één zin wat ze zeggen in het Nederlands"}`
 
-  const response = await callClaude({ max_tokens: 100, messages: [{ role: 'user', content: prompt }] })
-  const textBlock = response.content?.find((b: any) => b.type === 'text')
-  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  const replyText2 = await callGemini({ max_tokens: 100, messages: [{ role: 'user', content: prompt }] })
+  const jsonMatch = replyText2.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { classification: 'other', summary: replyText.slice(0, 100) }
   return JSON.parse(jsonMatch[0])
 }
@@ -1005,9 +1045,8 @@ Regels:
 Geef ALLEEN dit JSON terug:
 {"subject":"...","body":"..."}`
 
-  const response = await callClaude({ max_tokens: 800, messages: [{ role: 'user', content: prompt }] })
-  const textBlock = response.content?.find((b: any) => b.type === 'text')
-  const jsonMatch = textBlock?.text.match(/\{[\s\S]*\}/)
+  const draftText = await callGemini({ max_tokens: 800, messages: [{ role: 'user', content: prompt }] })
+  const jsonMatch = draftText.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Geen JSON in Email 2 draft response')
   const draft = JSON.parse(jsonMatch[0])
 
@@ -1316,11 +1355,9 @@ Geef ALLEEN dit JSON terug, niets anders:
   "email4": {"subject": "...", "body": "..."}
 }`
 
-    const response = await callClaude({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
-    const textBlock = response.content?.find((b: any) => b.type === 'text')
-    if (!textBlock) throw new Error('Geen response van Claude')
-    const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
+    const seqText2 = await callGemini({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+    const jsonMatch = seqText2.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error(`Geen JSON in response: ${seqText2.slice(0, 200)}`)
     const emails = JSON.parse(jsonMatch[0])
 
     await supabase.from('leads').update({
@@ -1381,11 +1418,9 @@ Geef ALLEEN dit JSON terug:
   {"label":"C","subject":"...","body":"..."}
 ]`
 
-    const response = await callClaude({ max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
-    const textBlock = response.content?.find((b: any) => b.type === 'text')
-    if (!textBlock) throw new Error('Geen response van Claude')
-    const jsonMatch = textBlock.text.match(/\[[\s\S]*\]/)
-    if (!jsonMatch) throw new Error(`Geen JSON in response: ${textBlock.text.slice(0, 200)}`)
+    const varText = await callGemini({ max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
+    const jsonMatch = varText.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) throw new Error(`Geen JSON in response: ${varText.slice(0, 200)}`)
     const variants = JSON.parse(jsonMatch[0])
 
     await supabase.from('leads').update({ email_variants: variants, selected_variant: 0, updated_at: new Date().toISOString() }).eq('id', id)
@@ -1486,12 +1521,10 @@ Eisen voor de e-mail:
 
 Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
 
-    const response = await callClaude({
+    const body = await callGemini({
       max_tokens: 700,
       messages: [{ role: 'user', content: prompt }],
     })
-
-    const body = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
 
     // Persist draft to Supabase
     await supabase.from('leads').update({ email_subject: subject, email_body: body }).eq('id', id)
