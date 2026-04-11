@@ -964,11 +964,17 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
 
   await transport.sendMail(mailOptions)
 
-  const seqIndex = emailNumber - 1
-  const followupDelays: Record<number, number> = { 1: 1, 2: 3, 3: 6 }
-  const followupDays = followupDelays[emailNumber]
-  const next_followup_at = followupDays ? new Date(Date.now() + followupDays * 24 * 60 * 60 * 1000).toISOString() : null
   const sentAtField = `email${emailNumber}_sent_at`
+  // Email 1 sent → send reminder 1 (email 3) in 48h
+  // Email 3 sent → send reminder 2 (email 4) in 5 more days (= day 7 from email 1)
+  // Email 4 sent → sequence done
+  const followupMs: Record<number, number> = {
+    1: 48 * 60 * 60 * 1000,
+    3: 5 * 24 * 60 * 60 * 1000,
+  }
+  const next_followup_at = followupMs[emailNumber]
+    ? new Date(Date.now() + followupMs[emailNumber]).toISOString()
+    : null
 
   await supabase.from('leads').update({
     status: 'sent',
@@ -976,10 +982,11 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     email_sequence_index: emailNumber,
     [sentAtField]: new Date().toISOString(),
     next_followup_at,
+    sequence_stopped: emailNumber === 4 ? true : false,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
-  log('Mail', `Email ${emailNumber} verstuurd naar ${lead.email} (${lead.company_name})`)
+  log('Mail', `Email ${emailNumber} verstuurd naar ${lead.email} (${lead.company_name})${next_followup_at ? ` — volgende: ${new Date(next_followup_at).toLocaleString('nl-NL')}` : ' — sequentie afgerond'}`)
 }
 
 // ─── Reply classification ─────────────────────────────────────────────────────
@@ -1030,26 +1037,27 @@ async function processReply(lead: any, rawReplyText: string) {
   const { classification, summary } = await classifyReply(replyText, lead)
   log('Reply', `Classificatie: ${classification} — ${summary}`)
 
-  // Always save the reply
+  // Always save the reply + stop auto-sequence (a human replied = no more auto-reminders)
   await supabase.from('leads').update({
     reply_received_at: new Date().toISOString(),
     reply_text: replyText,
     reply_classification: classification,
     crm_status: classification === 'not_interested' ? 'rejected' : 'replied',
+    sequence_stopped: true,
+    next_followup_at: null,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
   // Stop sequence on rejection
   if (classification === 'not_interested') {
-    await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
     log('Reply', `${lead.company_name} niet geïnteresseerd — sequentie gestopt`)
     return
   }
 
-  // Reschedule followup for out-of-office
+  // Reschedule followup for out-of-office (override the stop above)
   if (classification === 'out_of_office') {
     const reschedule = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    await supabase.from('leads').update({ next_followup_at: reschedule }).eq('id', lead.id)
+    await supabase.from('leads').update({ sequence_stopped: false, next_followup_at: reschedule }).eq('id', lead.id)
     log('Reply', `${lead.company_name} afwezig — herinnering ingepland over 7 dagen`)
     return
   }
@@ -1658,158 +1666,15 @@ Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
 
 app.post('/send-email/:id', async (req, res) => {
   const { id } = req.params
-  const { subject, body, emailTo } = req.body
+  const { emailNumber = 1 } = req.body
 
   const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
   if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
-  if (!lead.preview_url) return res.status(400).json({ error: 'Nog geen preview URL' })
-
-  const recipientEmail: string = emailTo || lead.email
-  if (!recipientEmail) return res.status(400).json({ error: 'Geen e-mailadres opgegeven' })
-
-  // Fall back to stored draft if not provided in request
-  const finalSubject: string | undefined = subject || lead.email_subject || undefined
-  const finalBody: string = body || lead.email_body || ''
-
-  const { data: settingsRows } = await supabase.from('settings').select('*')
-  const settings = Object.fromEntries(
-    (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
-  )
+  if (!lead.email) return res.status(400).json({ error: 'Geen e-mailadres' })
 
   try {
-    const transport = nodemailer.createTransport({
-      host: process.env.SMTP_HOST!,
-      port: parseInt(process.env.SMTP_PORT ?? '465'),
-      secure: process.env.SMTP_PORT !== '587',
-      auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
-    })
-
-    const previewUrl: string = lead.preview_url
-    const plainText: string = finalBody
-
-    const firstName = recipientEmail.split('@')[0].split(/[._-]/)[0]
-    const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
-    const defaultSubject = `Snel iets voor je gemaakt, ${name}`
-
-    const ctaButton = `
-      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px">
-        <tr>
-          <td>
-            <a href="${previewUrl}" target="_blank"
-               style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px;letter-spacing:0.3px">
-              Bekijk jouw nieuwe website →
-            </a>
-          </td>
-        </tr>
-      </table>`
-
-    // Convert plain text to HTML — replace any paragraph containing the URL with the CTA button
-    const cleanBody = plainText
-      .split('\n\n')
-      .filter(p => p.trim())
-      .map(para => {
-        if (para.includes(previewUrl)) return ctaButton
-        const escaped = para
-          .split('\n')
-          .map((line: string) => line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'))
-          .join('<br>')
-        return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
-      })
-      .join('')
-
-    const html = `<!DOCTYPE html>
-<html lang="nl">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f4f4f4;padding:32px 0">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
-
-          <!-- Header -->
-          <tr>
-            <td style="background:#0f0f0f;padding:28px 40px;text-align:left">
-              <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png"
-                   alt="Graphic Vision" width="160" style="display:block;height:auto;max-height:40px;object-fit:contain">
-            </td>
-          </tr>
-
-          <!-- Body -->
-          <tr>
-            <td style="padding:40px 40px 32px">
-              ${cleanBody}
-            </td>
-          </tr>
-
-          <!-- Divider -->
-          <tr>
-            <td style="padding:0 40px">
-              <hr style="border:none;border-top:1px solid #e8e8e8;margin:0">
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:24px 40px 32px;background:#fafafa">
-              <table cellpadding="0" cellspacing="0" role="presentation">
-                <tr>
-                  <td style="padding-right:16px;vertical-align:middle">
-                    <img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png"
-                         alt="Graphic Vision" width="100" style="display:block;height:auto;object-fit:contain;opacity:0.7">
-                  </td>
-                  <td style="border-left:2px solid #e8e8e8;padding-left:16px;vertical-align:middle">
-                    <p style="margin:0;font-size:13px;color:#888;line-height:1.6">
-                      Graphic Vision<br>
-                      <a href="https://graphicvision.nl" style="color:#FF794F;text-decoration:none">graphicvision.nl</a>
-                    </p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-        </table>
-
-        <!-- Unsubscribe note -->
-        <p style="margin:16px 0 0;font-size:11px;color:#aaa;text-align:center">
-          Je ontvangt deze e-mail omdat wij denken dat we je kunnen helpen.
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
-
-    await transport.sendMail({
-      from: `Graphic Vision <${process.env.SMTP_USER}>`,
-      to: recipientEmail,
-      bcc: 'graphicvisionnl@gmail.com',
-      subject: finalSubject ?? defaultSubject,
-      html,
-      text: plainText,
-    })
-
-    // Track sequence state
-    const seqIndex: number = lead.email_sequence_index ?? 0
-    const nextIndex = seqIndex + 1
-    const followupDelays: Record<number, number> = { 1: 1, 2: 3, 3: 6 }  // email2: +1d, email3: +3d, email4: +6d
-    const followupDays = followupDelays[nextIndex]
-    const next_followup_at = followupDays && nextIndex < 4
-      ? new Date(Date.now() + followupDays * 24 * 60 * 60 * 1000).toISOString()
-      : null
-
-    const sentAtField = `email${seqIndex + 1}_sent_at` as string
-    await supabase.from('leads').update({
-      status: 'sent',
-      crm_status: 'contacted',
-      email_sequence_index: nextIndex,
-      [sentAtField]: new Date().toISOString(),
-      next_followup_at,
-      updated_at: new Date().toISOString(),
-    }).eq('id', id)
-
-    log('Mail', `Verzonden naar ${recipientEmail} (email ${seqIndex + 1}/4)${next_followup_at ? ` — volgende: ${next_followup_at.slice(0, 10)}` : ''}`)
-    res.json({ success: true, email_sequence_index: nextIndex, next_followup_at })
+    await sendEmailForLead(lead, emailNumber as 1 | 2 | 3 | 4)
+    res.json({ success: true })
   } catch (e) {
     log('Mail', `Fout bij versturen naar ${lead.email}: ${e}`)
     res.status(500).json({ error: String(e) })
@@ -1841,6 +1706,59 @@ app.post('/check-replies', async (req, res) => {
   res.json({ success: true, message: 'IMAP check gestart' })
   checkReplies().catch(e => log('IMAP', `check-replies fout: ${e}`))
 })
+
+// ─── Auto followup sender ─────────────────────────────────────────────────────
+
+async function sendDueFollowups() {
+  const now = new Date().toISOString()
+  const { data: leads, error } = await supabase
+    .from('leads')
+    .select('*')
+    .lte('next_followup_at', now)
+    .eq('sequence_stopped', false)
+    .not('next_followup_at', 'is', null)
+
+  if (error) { log('Followup', `DB fout: ${error.message}`); return }
+  if (!leads || leads.length === 0) return
+
+  log('Followup', `${leads.length} lead(s) klaar voor automatische herinnering`)
+
+  for (const lead of leads) {
+    // email_sequence_index 1 → send email 3 (reminder 1)
+    // email_sequence_index 3 → send email 4 (reminder 2)
+    const nextEmail = lead.email_sequence_index === 1 ? 3 : lead.email_sequence_index === 3 ? 4 : null
+    if (!nextEmail) {
+      // Unknown state — stop to avoid loop
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
+      continue
+    }
+
+    const bodyKey = `email${nextEmail}_body`
+    if (!lead[bodyKey] || !lead.email) {
+      log('Followup', `${lead.company_name} — email ${nextEmail} body ontbreekt, overgeslagen`)
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
+      continue
+    }
+
+    try {
+      await sendEmailForLead(lead, nextEmail as 1 | 2 | 3 | 4)
+      log('Followup', `Herinnering ${nextEmail} verstuurd naar ${lead.company_name}`)
+      await sleep(15_000) // 15s between sends
+    } catch (e) {
+      log('Followup', `Fout bij ${lead.company_name}: ${e}`)
+    }
+  }
+}
+
+// Run followup check every hour
+setInterval(() => {
+  sendDueFollowups().catch(e => log('Followup', `Interval fout: ${e}`))
+}, 60 * 60 * 1000)
+
+// Also run once 2 minutes after startup (catches anything that was due while server was down)
+setTimeout(() => {
+  sendDueFollowups().catch(e => log('Followup', `Startup check fout: ${e}`))
+}, 2 * 60 * 1000)
 
 const PORT = process.env.PORT ?? 3001
 app.listen(PORT, () => log('Server', `Draait op poort ${PORT}`))
