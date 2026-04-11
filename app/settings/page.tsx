@@ -15,7 +15,6 @@ interface Settings {
   niches_list: string[]
   smtp_accounts: SmtpAccount[]
   max_leads: string
-  email_signature: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -24,7 +23,6 @@ const DEFAULT_SETTINGS: Settings = {
   niches_list: [],
   smtp_accounts: [],
   max_leads: '30',
-  email_signature: 'Met vriendelijke groet,\nEzra\nGraphic Vision\ngraphicvision.nl',
 }
 
 const MODE_OPTIONS: { value: AutoMode; label: string; desc: string; color: string }[] = [
@@ -163,7 +161,6 @@ export default function SettingsPage() {
           niches_list: parseJsonArray(data.niches_list),
           smtp_accounts: parseJsonArray(data.smtp_accounts) as unknown as SmtpAccount[],
           max_leads: data.max_leads ?? '30',
-          email_signature: data.email_signature ?? DEFAULT_SETTINGS.email_signature,
         })
       })
   }, [])
@@ -186,7 +183,6 @@ export default function SettingsPage() {
           niches_list: JSON.stringify(settings.niches_list),
           smtp_accounts: JSON.stringify(settings.smtp_accounts),
           max_leads: settings.max_leads,
-          email_signature: settings.email_signature,
         }),
       })
       setSaved(true)
@@ -300,20 +296,6 @@ export default function SettingsPage() {
           <div className="p-4">
             <AddAccountRow onAdd={acc => setSettings(s => ({ ...s, smtp_accounts: [...s.smtp_accounts, acc] }))} />
           </div>
-        </div>
-      </div>
-
-      {/* Email signature */}
-      <div className="bg-surface rounded-xl border border-subtle">
-        <div className="p-5">
-          <label className="block text-sm font-medium mb-1">E-mail handtekening</label>
-          <p className="text-white/40 text-xs mb-3">Wordt onderaan elke e-mail geplaatst.</p>
-          <textarea
-            value={settings.email_signature}
-            onChange={e => setSettings(s => ({ ...s, email_signature: e.target.value }))}
-            rows={4}
-            className="bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 w-full resize-none"
-          />
         </div>
       </div>
 
