@@ -11,7 +11,6 @@ const NEXT_PHASE_LABEL: Record<string, string> = {
   scraped:    'Kwalificeren',
   no_email:   'Kwalificeren',
   error:      'Opnieuw kwalificeren',
-  qualified:  'Genereer',
   redesigned: 'Deployen',
 }
 
@@ -35,6 +34,23 @@ interface LeadsTableProps {
 export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onRefresh }: LeadsTableProps) {
   const [deletingAll, setDeletingAll] = useState(false)
   const [advancing, setAdvancing] = useState<string | null>(null)
+  const [sending, setSending] = useState<string | null>(null)
+
+  async function sendEmail1(lead: Lead) {
+    if (!confirm(`Email 1 versturen naar ${lead.company_name}?`)) return
+    setSending(lead.id)
+    try {
+      const pipelineUrl = '/api/pipeline/send-email'
+      await fetch(pipelineUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, emailNumber: 1 }),
+      })
+      onRefresh()
+    } finally {
+      setSending(null)
+    }
+  }
 
   async function advanceLead(lead: Lead) {
     setAdvancing(lead.id)
@@ -132,12 +148,24 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                     className="border-b border-subtle last:border-0 hover:bg-white/[0.03] transition-colors"
                   >
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/leads/${lead.id}`}
-                        className="font-medium hover:text-brand transition-colors"
-                      >
-                        {lead.company_name ?? '—'}
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={`/leads/${lead.id}`}
+                          className="font-medium hover:text-brand transition-colors"
+                        >
+                          {lead.company_name ?? '—'}
+                        </Link>
+                        {lead.status === 'qualified' && lead.email1_subject && !lead.email1_sent_at && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 font-medium whitespace-nowrap">
+                            ✓ concept
+                          </span>
+                        )}
+                        {lead.email1_sent_at && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 font-medium whitespace-nowrap">
+                            ✓ verstuurd
+                          </span>
+                        )}
+                      </div>
                       {lead.website_url && (
                         <a
                           href={lead.website_url}
@@ -200,17 +228,32 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                       })}
                     </td>
                     <td className="px-4 py-3">
-                      {NEXT_PHASE_LABEL[lead.status] && (
-                        <button
-                          onClick={() => advanceLead(lead)}
-                          disabled={advancing !== null}
-                          className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/50 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
-                        >
-                          {advancing === lead.id
-                            ? <><span className="w-2.5 h-2.5 border border-white/30 border-t-white rounded-full animate-spin" />Bezig…</>
-                            : `▶ ${NEXT_PHASE_LABEL[lead.status]}`}
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {/* Qualified + draft ready + not yet sent → Send button */}
+                        {lead.status === 'qualified' && lead.email1_subject && !lead.email1_sent_at && (
+                          <button
+                            onClick={() => sendEmail1(lead)}
+                            disabled={sending === lead.id}
+                            className="px-2.5 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-lg text-xs hover:bg-blue-500/25 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
+                          >
+                            {sending === lead.id
+                              ? <><span className="w-2.5 h-2.5 border border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />Verzenden…</>
+                              : '↑ Verstuur Email 1'}
+                          </button>
+                        )}
+                        {/* Other phases advance button */}
+                        {NEXT_PHASE_LABEL[lead.status] && (
+                          <button
+                            onClick={() => advanceLead(lead)}
+                            disabled={advancing !== null}
+                            className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/50 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
+                          >
+                            {advancing === lead.id
+                              ? <><span className="w-2.5 h-2.5 border border-white/30 border-t-white rounded-full animate-spin" />Bezig…</>
+                              : `▶ ${NEXT_PHASE_LABEL[lead.status]}`}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
