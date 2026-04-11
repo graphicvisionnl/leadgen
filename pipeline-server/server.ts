@@ -891,17 +891,43 @@ async function sendRunNotification(stats: { niche: string; city: string; scraped
 async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
   const subjectKey = `email${emailNumber}_subject` as const
   const bodyKey = `email${emailNumber}_body` as const
-  const subject: string = lead[subjectKey] ?? lead.email_subject ?? ''
   let body: string = lead[bodyKey] ?? lead.email_body ?? ''
-  if (!subject || !body || !lead.email) throw new Error('Ontbrekende email data')
+  if (!body || !lead.email) throw new Error('Ontbrekende email data')
+
+  // Email 2: always send as threaded reply on existing conversation
+  const isThreadedReply = emailNumber === 2 && lead.reply_message_id
+  const subject: string = isThreadedReply
+    ? `Re: ${lead.email1_subject ?? lead.email_subject ?? ''}`
+    : (lead[subjectKey] ?? lead.email_subject ?? '')
+
+  if (!subject) throw new Error('Ontbrekend onderwerp')
 
   const { data: settingsRows } = await supabase.from('settings').select('*')
   const settings = Object.fromEntries(
     (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
   )
 
-  // Pick rotating send account
-  const account = await getNextSendAccount(settings)
+  // Email 2: reply from the same account that received the client's reply
+  // All others: use rotating account
+  let account: { email: string; name: string; pass: string }
+  if (isThreadedReply && lead.reply_received_by) {
+    let accounts: { email: string; pass: string }[] = []
+    try { accounts = JSON.parse(settings.smtp_accounts ?? '[]') } catch {}
+    const mainUser = process.env.SMTP_USER!
+    if (mainUser && !accounts.find((a: any) => a.email === mainUser)) {
+      accounts.push({ email: mainUser, pass: process.env.SMTP_PASS! })
+    }
+    const found = accounts.find((a: any) => a.email.toLowerCase() === lead.reply_received_by.toLowerCase())
+    if (found) {
+      const prefix = found.email.split('@')[0]
+      const name = prefix.charAt(0).toUpperCase() + prefix.slice(1)
+      account = { email: found.email, name, pass: found.pass ?? process.env.SMTP_PASS! }
+    } else {
+      account = await getNextSendAccount(settings)
+    }
+  } else {
+    account = await getNextSendAccount(settings)
+  }
 
   // Strip any existing signature from body and append clean one
   body = body
@@ -932,6 +958,36 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       text: body,
+    }
+  } else if (emailNumber === 2 && isThreadedReply) {
+    // Send as threaded reply — same account, Re: subject, In-Reply-To header
+    const previewUrl = lead.preview_url ?? null
+    const cleanBodyHtml = body.split('\n\n').filter((p: string) => p.trim()).map((para: string) => {
+      if (previewUrl && para.includes(previewUrl)) {
+        return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:8px 0 24px"><tr><td><a href="${previewUrl}" target="_blank" style="display:inline-block;background:#FF794F;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px">Bekijk jouw nieuwe website →</a></td></tr></table>`
+      }
+      const escaped = para.split('\n').map((l: string) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).join('<br>')
+      return `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#1a1a1a">${escaped}</p>`
+    }).join('')
+    const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 0"><tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
+<tr><td style="background:#0f0f0f;padding:28px 40px"><img src="https://graphicvision.nl/wp-content/uploads/2026/03/graphic-vision-logo-orange.png" alt="Graphic Vision" width="160" style="display:block;height:auto"></td></tr>
+<tr><td style="padding:40px 40px 32px">${cleanBodyHtml}</td></tr>
+<tr><td style="padding:24px 40px 32px;background:#fafafa;border-top:1px solid #e8e8e8"><p style="margin:0;font-size:13px;color:#888">Graphic Vision<br><a href="https://graphicvision.nl" style="color:#FF794F">graphicvision.nl</a></p></td></tr>
+</table></td></tr></table></body></html>`
+    mailOptions = {
+      from: `${account.name} <${account.email}>`,
+      to: lead.email,
+      bcc: 'graphicvisionnl@gmail.com',
+      subject,
+      html,
+      text: body,
+      headers: {
+        'In-Reply-To': lead.reply_message_id,
+        'References': lead.reply_message_id,
+      },
     }
   } else {
     const previewUrl = lead.preview_url ?? null
@@ -1030,7 +1086,7 @@ function extractReplyText(raw: string): string {
 }
 
 // Core reply handler — classify, save, trigger redesign pipeline, draft Email 2
-async function processReply(lead: any, rawReplyText: string) {
+async function processReply(lead: any, rawReplyText: string, replyMessageId: string | null = null, receivedByAccount: string | null = null) {
   const replyText = extractReplyText(rawReplyText)
   log('Reply', `Reactie van ${lead.company_name}: "${replyText.slice(0, 80)}…"`)
 
@@ -1045,6 +1101,8 @@ async function processReply(lead: any, rawReplyText: string) {
     crm_status: classification === 'not_interested' ? 'rejected' : 'replied',
     sequence_stopped: true,
     next_followup_at: null,
+    ...(replyMessageId ? { reply_message_id: replyMessageId } : {}),
+    ...(receivedByAccount ? { reply_received_by: receivedByAccount } : {}),
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
@@ -1192,7 +1250,7 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
         // Skip any of our own sending accounts
         if (fromEmail === imapUser.toLowerCase()) continue
 
-        // Match to a lead that was emailed from this account (or any if sent_from not set)
+        // Match to a lead by email address with open sequence
         const { data: lead } = await supabase
           .from('leads')
           .select('*')
@@ -1206,12 +1264,15 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
         const bodyBuffer = msg.bodyParts?.get('1') ?? msg.bodyParts?.get('TEXT')
         const rawBody = bodyBuffer ? Buffer.from(bodyBuffer as any).toString('utf-8') : msg.envelope?.subject ?? ''
 
+        // Capture Message-ID for reply threading
+        const replyMessageId = msg.envelope?.messageId ?? null
+
         await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true })
 
         log('IMAP', `Reactie van ${lead.company_name} (${fromEmail}) → inbox ${imapUser}`)
         found++
 
-        processReply(lead, rawBody).catch(e => log('IMAP', `processReply fout: ${e}`))
+        processReply(lead, rawBody, replyMessageId, imapUser).catch(e => log('IMAP', `processReply fout: ${e}`))
       }
     } finally {
       lock.release()

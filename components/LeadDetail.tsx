@@ -239,14 +239,13 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   }
 
   async function sendEmail(emailIdx: number) {
-    const email = emails[emailIdx - 1]
     setSending(true)
     setSendError('')
     try {
       const res = await fetch(`/api/leads/${lead.id}/send-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: email.subject, body: email.body, emailTo }),
+        body: JSON.stringify({ emailNumber: emailIdx }),
       })
       const data = await res.json()
       if (res.ok) {
