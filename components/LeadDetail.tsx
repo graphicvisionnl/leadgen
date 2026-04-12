@@ -242,6 +242,15 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     setSending(true)
     setSendError('')
     try {
+      // If emailTo was typed manually and differs from stored email, save it first
+      if (emailTo && emailTo !== lead.email) {
+        await fetch(`/api/leads/${lead.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: emailTo }),
+        })
+        setLead(l => ({ ...l, email: emailTo }))
+      }
       const res = await fetch(`/api/leads/${lead.id}/send-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
