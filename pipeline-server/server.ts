@@ -391,12 +391,29 @@ GOOGLE RATING: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} 
 OPGEHAALDE WEBSITE TEKST:
 ${signals.text || '(website niet bereikbaar — geen tekst beschikbaar)'}
 
-KWALIFICATIEREGELS — wees RUIMHARTIG, standaard is qualified=true:
-- qualified=true: bijna altijd, tenzij de website DUIDELIJK modern en professioneel is
-- qualified=false ALLEEN als: de website aantoonbaar modern/recent/professioneel oogt (veel tekst over features, clean layout, recente copyright, duidelijk een professioneel bureau gebouwd)
-- Een simpele of dunne website is qualified=true — ook al lijkt die redelijk
-- Geen tekst beschikbaar: qualified=true (we weten het niet, stuur toch)
-- heeft_geen_website (404/error): qualified=true
+KWALIFICATIEREGELS — wees STRENG, standaard is qualified=false:
+Wij verkopen websiteverbeteringen. Stuur ALLEEN naar bedrijven die echt een verouderde, simpele of onduidelijke site hebben. Bedrijven met een al goede site hebben geen boodschap aan ons aanbod.
+
+qualified=false (DISQUALIFY) als ÉÉN van de volgende geldt:
+- De site oogt modern, clean en professioneel (strakke layout, witruimte, duidelijke typografie)
+- Professionele fotografie of hoogwaardige visuals zichtbaar in de tekst/opbouw
+- Duidelijke CTA's aanwezig boven de vouw (offerte knop, telefoonnummer prominent, chatwidget)
+- Goede mobiele versie (hints: "responsive", viewport meta, flexibele layout-taal)
+- Keurmerken, prijzen, certificaten of awards vermeld (bijv. "beste loodgieter", "award", "gecertificeerd", "erkend", keurmerk logo's)
+- Meerdere pagina's met duidelijke structuur (diensten, over ons, projecten, blog, cases)
+- Copyright jaar 2022 of later, of tekst die wijst op recent bouwen
+- Grote, bekende of landelijk opererende spelers (franchises, ketens, platforms zoals zoofy.nl, werkspot.nl)
+- Site lijkt gebouwd door een professioneel bureau (veel features, gelikte copy, duidelijke branding)
+
+qualified=true (KWALIFICEER) ALLEEN als:
+- De site oogt duidelijk verouderd, amateuristisch of rommelig
+- Weinig of geen duidelijke CTA's — bezoeker weet niet wat te doen
+- Slechte of ontbrekende mobiele versie
+- Dunne content: nauwelijks tekst, weinig pagina's, geen structuur
+- Geen tekst beschikbaar (website niet bereikbaar / 404): qualified=true — we weten het niet
+
+Bij twijfel: qualified=false. Liever te weinig dan te veel leads.
+
 - mobile_friendly: schat in of de tekst hints geeft op een moderne responsieve site
 - has_cta: is er een duidelijke CTA aanwezig (offerte, bel, contact, boek, etc.)?
 - outdated_feel: ziet de site er verouderd/amateuristisch uit?
