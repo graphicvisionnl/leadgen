@@ -412,7 +412,7 @@ qualified=true (KWALIFICEER) ALLEEN als:
 - Dunne content: nauwelijks tekst, weinig pagina's, geen structuur
 - Geen tekst beschikbaar (website niet bereikbaar / 404): qualified=true — we weten het niet
 
-Bij twijfel: qualified=false. Liever te weinig dan te veel leads.
+Bij twijfel: qualified=true. Liever te veel leads dan een scrape verspillen.
 
 - mobile_friendly: schat in of de tekst hints geeft op een moderne responsieve site
 - has_cta: is er een duidelijke CTA aanwezig (offerte, bel, contact, boek, etc.)?
