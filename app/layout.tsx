@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { Plus_Jakarta_Sans } from 'next/font/google'
-import Link from 'next/link'
+import { AppNav } from '@/components/AppNav'
 import './globals.css'
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -18,44 +18,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="nl" className={plusJakarta.variable}>
       <body className="bg-dark text-white font-sans antialiased min-h-screen">
-        <nav className="border-b border-subtle bg-dark/80 backdrop-blur-sm sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-7 h-7 rounded-lg bg-brand flex items-center justify-center">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2 2h4v4H2zM8 2h4v4H8zM2 8h4v4H2zM8 8h4v4H8z" fill="white" fillOpacity="0.9"/>
-                </svg>
-              </div>
-              <span className="font-semibold text-sm">Graphic Vision</span>
-              <span className="text-white/30 text-sm">/</span>
-              <span className="text-white/50 text-sm">Lead Gen</span>
-            </div>
-            <div className="flex items-center gap-5 text-sm">
-              <Link href="/" className="text-white/60 hover:text-white transition-colors">
-                Dashboard
-              </Link>
-              <Link href="/scraped" className="text-white/60 hover:text-white transition-colors">
-                Scraped
-              </Link>
-              <Link href="/qualified" className="text-white/60 hover:text-white transition-colors">
-                Qualified
-              </Link>
-              <Link href="/redesigns" className="text-white/60 hover:text-white transition-colors">
-                Redesigns
-              </Link>
-              <Link href="/deployed" className="text-white/60 hover:text-white transition-colors">
-                Deployed
-              </Link>
-              <Link href="/contacted" className="text-white/60 hover:text-white transition-colors">
-                Benaderd
-              </Link>
-              <Link href="/settings" className="text-white/60 hover:text-white transition-colors">
-                Instellingen
-              </Link>
-            </div>
-          </div>
-        </nav>
-        <main className="max-w-7xl mx-auto px-6 py-8">
+        <AppNav />
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
           {children}
         </main>
       </body>
