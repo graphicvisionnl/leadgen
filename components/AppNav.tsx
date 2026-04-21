@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { href: '/', label: 'Dashboard' },
   { href: '/scraped', label: 'Scraped' },
   { href: '/qualified', label: 'Qualified' },
+  { href: '/email-ready', label: 'Email Ready' },
   { href: '/redesigns', label: 'Redesigns' },
   { href: '/deployed', label: 'Deployed' },
   { href: '/contacted', label: 'Benaderd' },

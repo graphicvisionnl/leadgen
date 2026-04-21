@@ -35,6 +35,7 @@ const PHASES = [
 const NAV_CARDS = [
   { href: '/scraped',   label: 'Gescraped',      desc: 'Wacht op kwalificatie',  color: 'text-blue-400',   stat: 'scraped' },
   { href: '/qualified', label: 'Gekwalificeerd',  desc: 'Klaar voor redesign',    color: 'text-yellow-400', stat: 'qualified' },
+  { href: '/email-ready', label: 'Email Ready',   desc: 'Concepten klaar om te sturen', color: 'text-cyan-400', stat: null },
   { href: '/redesigns', label: 'Redesigns',       desc: 'Klaar voor deployment',  color: 'text-purple-400', stat: null },
   { href: '/deployed',  label: 'Deployed',        desc: 'Klaar om te versturen',  color: 'text-brand',      stat: 'deployed' },
   { href: '/contacted', label: 'Benaderd',        desc: 'CRM & sequentie',        color: 'text-green-400',  stat: 'sent' },
