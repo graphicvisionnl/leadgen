@@ -15,7 +15,15 @@ function normalizeDelayMs(raw: unknown): number {
 function cleanLeadIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   const ids = raw.filter((id): id is string => typeof id === 'string' && id.length > 0)
-  return [...new Set(ids)]
+  const seen: Record<string, true> = {}
+  const unique: string[] = []
+  for (const id of ids) {
+    if (!seen[id]) {
+      seen[id] = true
+      unique.push(id)
+    }
+  }
+  return unique
 }
 
 function sleep(ms: number): Promise<void> {
