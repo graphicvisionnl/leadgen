@@ -220,6 +220,19 @@ function isValidUrl(url: string): boolean {
   try { new URL(normalizeUrl(url)); return true } catch { return false }
 }
 
+// Search terms per niche — multiple intent-based terms for Apify
+const NICHE_SEARCH_TERMS: Record<string, string[]> = {
+  loodgieter:         ['loodgieter', 'spoed loodgieter', 'ontstoppingsdienst', 'cv monteur'],
+  elektricien:        ['elektricien', 'storing elektricien', 'groepenkast vervangen'],
+  schilder:           ['schilder', 'schildersbedrijf', 'binnenschilder'],
+  kapper:             ['kapper', 'barbershop', 'kapsalon'],
+  slotenmaker:        ['slotenmaker', 'spoed slotenmaker', 'deur openen slotenmaker'],
+  dakdekker:          ['dakdekker', 'dakreparatie', 'daklekkage'],
+  schoonmaakbedrijf:  ['schoonmaakbedrijf', 'kantoor schoonmaak', 'glasbewassing'],
+  aannemer:           ['aannemer', 'verbouwing aannemer', 'bouwbedrijf'],
+  stukadoor:          ['stukadoor', 'stucwerk', 'pleisterwerk'],
+}
+
 function loadSkill(filename: string): string {
   try {
     return fs.readFileSync(path.join(__dirname, '../../lib/skills', filename), 'utf-8')
@@ -340,12 +353,21 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   log('Phase 1', `Scraping "${niche}" in "${city}" (max ${maxLeads})`)
   const token = process.env.APIFY_API_TOKEN!
 
+  // Use intent-based search terms per niche; fall back to niche name alone
+  const searchTerms = NICHE_SEARCH_TERMS[niche.toLowerCase()] ?? [niche]
+  log('Phase 1', `Zoektermen: ${searchTerms.join(', ')}`)
+
   const startRes = await fetch(
     `https://api.apify.com/v2/acts/nwua9Gu5YrADL7ZDj/runs?token=${token}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ searchString: `${niche} ${city}`, maxCrawledPlaces: maxLeads, language: 'nl' }),
+      body: JSON.stringify({
+        searchStringsArray: searchTerms,
+        locationQuery: `${city}, Nederland`,
+        maxCrawledPlaces: maxLeads,
+        language: 'nl',
+      }),
     }
   )
   if (!startRes.ok) throw new Error(`Apify start failed: ${await startRes.text()}`)
@@ -364,15 +386,50 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   const resultsRes = await fetch(
     `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=1000`
   )
-  const businesses = await resultsRes.json()
-  log('Phase 1', `${businesses.length} bedrijven ontvangen`)
+  const businesses: any[] = await resultsRes.json()
+  log('Phase 1', `${businesses.length} bedrijven ontvangen van Apify`)
 
-  const urls = businesses.filter((b: any) => b.website).map((b: any) => normalizeUrl(b.website))
+  // ─── Hard filter before DB insert ────────────────────────────────────────────
+  let filtNoWebsite = 0, filtClosed = 0, filtRating = 0, filtReviews = 0
+
+  const afterHardFilter = businesses.filter((b: any) => {
+    if (!b.website || !isValidUrl(b.website)) {
+      filtNoWebsite++; return false
+    }
+    if (b.permanentlyClosed === true || b.temporarilyClosed === true) {
+      filtClosed++; return false
+    }
+    // Rating filter: only 3.0–4.5 (skip no-rating leads? No — allow missing rating)
+    if (b.totalScore !== null && b.totalScore !== undefined) {
+      if (b.totalScore < 3.0 || b.totalScore > 4.5) {
+        filtRating++; return false
+      }
+    }
+    // Review count filter: 10–200 (too few = not established; too many = over-optimized)
+    if (b.reviewsCount !== null && b.reviewsCount !== undefined) {
+      if (b.reviewsCount < 10 || b.reviewsCount > 200) {
+        filtReviews++; return false
+      }
+    }
+    return true
+  })
+
+  const totalFiltered = filtNoWebsite + filtClosed + filtRating + filtReviews
+  if (filtNoWebsite)  log('Phase 1', `Gefilterd: ${filtNoWebsite} zonder website`)
+  if (filtClosed)     log('Phase 1', `Gefilterd: ${filtClosed} gesloten bedrijven`)
+  if (filtRating)     log('Phase 1', `Gefilterd: ${filtRating} rating buiten 3.0–4.5`)
+  if (filtReviews)    log('Phase 1', `Gefilterd: ${filtReviews} reviews buiten 10–200`)
+  log('Phase 1', `Na filtering: ${afterHardFilter.length} leads (${totalFiltered} gefilterd)`)
+
+  // ─── Dedup against existing leads ────────────────────────────────────────────
+  const urls = afterHardFilter.map((b: any) => normalizeUrl(b.website))
   const { data: existing } = await supabase.from('leads').select('website_url').in('website_url', urls)
   const existingUrls = new Set((existing ?? []).map((e: any) => e.website_url))
+  const filtExisting = afterHardFilter.filter((b: any) => existingUrls.has(normalizeUrl(b.website))).length
+  if (filtExisting) log('Phase 1', `Gefilterd: ${filtExisting} al bekende leads (dedup)`)
 
-  const toInsert = businesses
-    .filter((b: any) => b.website && isValidUrl(b.website) && !existingUrls.has(normalizeUrl(b.website)))
+  const toInsert = afterHardFilter
+    .filter((b: any) => !existingUrls.has(normalizeUrl(b.website)))
     .map((b: any) => ({
       company_name: b.title,
       website_url: normalizeUrl(b.website),
@@ -385,10 +442,10 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
       pipeline_run_id: runId,
     }))
 
-  if (!toInsert.length) { log('Phase 1', 'Geen nieuwe leads'); return 0 }
+  if (!toInsert.length) { log('Phase 1', 'Geen nieuwe leads om in te voegen'); return 0 }
   const { data: inserted, error } = await supabase.from('leads').insert(toInsert).select('id')
   if (error) throw error
-  log('Phase 1', `${inserted?.length} leads ingevoegd`)
+  log('Phase 1', `${inserted?.length} leads ingevoegd — ${businesses.length} raw → ${totalFiltered + filtExisting} gefilterd → ${inserted?.length} nieuw`)
   await supabase.from('pipeline_runs').update({ scraped_count: inserted?.length ?? 0 }).eq('id', runId)
   return inserted?.length ?? 0
 }
@@ -468,7 +525,10 @@ interface ScoreBreakdown {
   internal_link_count: number
 }
 
-function calculateLeadScore(breakdown: ScoreBreakdown): { score: number; hot_lead: boolean } {
+function calculateLeadScore(
+  breakdown: ScoreBreakdown,
+  opts?: { googleRating?: number | null; reviewCount?: number | null }
+): { score: number; hot_lead: boolean } {
   let score = 0
   if (breakdown.website_exists) score += 20
   if (breakdown.email_found)    score += 15
@@ -477,6 +537,18 @@ function calculateLeadScore(breakdown: ScoreBreakdown): { score: number; hot_lea
   if (!breakdown.mobile_friendly) score += 10 // opportunity
   if (!breakdown.has_cta)       score += 15  // opportunity
   if (breakdown.internal_link_count > 5) score += 15 // established site
+
+  // Google rating signals
+  const rating = opts?.googleRating
+  const reviews = opts?.reviewCount
+  if (rating !== undefined && rating !== null) {
+    if (rating >= 3.0 && rating <= 4.2) score += 10  // sweet spot — room to improve
+    if (rating > 4.6)                   score -= 15  // already highly rated, less opportunity
+  }
+  if (reviews !== undefined && reviews !== null) {
+    if (reviews > 300) score -= 10  // over-established / over-optimized
+  }
+
   return { score, hot_lead: score >= 65 }
 }
 
@@ -546,7 +618,10 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
     outdated_feel: result.outdated_feel ?? false,
     internal_link_count: signals.internal_link_count,
   }
-  const { score: leadScore, hot_lead } = calculateLeadScore(breakdown)
+  const { score: leadScore, hot_lead } = calculateLeadScore(breakdown, {
+    googleRating: lead.google_rating,
+    reviewCount: lead.review_count,
+  })
 
   await supabase.from('leads').update({
     status: result.qualified ? 'qualified' : 'disqualified',

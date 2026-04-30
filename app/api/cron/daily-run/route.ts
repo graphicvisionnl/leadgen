@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     body: JSON.stringify({
       niche,
       city,
-      maxLeads: parseInt(settings.max_leads ?? '30'),
+      maxLeads: parseInt(settings.max_leads ?? '80'),
       mode: autoMode === 'auto_send' ? 'send' : 'draft',
     }),
   }).catch(() => null)
