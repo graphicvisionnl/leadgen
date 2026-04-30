@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Lead, LeadStatus, CrmStatus, ScoreBreakdown, EmailVariant, ReplyClassification } from '@/types'
 import { StatusBadge } from './StatusBadge'
-import { formatDistanceToNow, isPast } from 'date-fns'
+import { format, formatDistanceToNow, isPast } from 'date-fns'
 import { nl } from 'date-fns/locale'
 
 const REPLY_CLASS_LABELS: Record<ReplyClassification, { label: string; color: string }> = {
@@ -122,6 +122,43 @@ const CRM_OPTIONS: { value: CrmStatus; label: string; color: string }[] = [
   { value: 'rejected',      label: 'Afgewezen',      color: 'text-red-400' },
 ]
 
+function toDateTimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function defaultScheduledTimeLocal(): string {
+  const now = new Date()
+  const target = new Date(now.getTime() + 30 * 60 * 1000)
+  target.setSeconds(0, 0)
+
+  const roundedMinutes = target.getMinutes() <= 30 ? 30 : 60
+  target.setMinutes(roundedMinutes, 0, 0)
+
+  if (target.getHours() < 7) {
+    target.setHours(7, 0, 0, 0)
+  } else if (target.getHours() >= 18) {
+    target.setDate(target.getDate() + 1)
+    target.setHours(7, 0, 0, 0)
+  }
+
+  return toDateTimeLocalValue(target)
+}
+
+function validateScheduledLocal(value: string): { ok: true; iso: string } | { ok: false; error: string } {
+  if (!value) return { ok: false, error: 'Kies een datum en tijd' }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return { ok: false, error: 'Ongeldige datum/tijd' }
+  if (date.getTime() <= Date.now()) return { ok: false, error: 'Kies een tijd in de toekomst' }
+
+  const minutes = date.getHours() * 60 + date.getMinutes()
+  if (minutes < 7 * 60 || minutes >= 18 * 60) {
+    return { ok: false, error: 'Plan tussen 07:00 en 18:00' }
+  }
+
+  return { ok: true, iso: date.toISOString() }
+}
+
 interface LeadDetailProps {
   lead: Lead
 }
@@ -142,6 +179,9 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [sequenceError, setSequenceError] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
+  const [sendSuccess, setSendSuccess] = useState('')
+  const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now')
+  const [scheduledAtLocal, setScheduledAtLocal] = useState(defaultScheduledTimeLocal())
   const [stoppingSequence, setStoppingSequence] = useState(false)
 
   // Per-email editable state
@@ -238,9 +278,10 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     setLead(l => ({ ...l, selected_variant: idx }))
   }
 
-  async function sendEmail(emailIdx: number) {
+  async function sendEmail(emailIdx: number, scheduledFor?: string) {
     setSending(true)
     setSendError('')
+    setSendSuccess('')
     try {
       // If emailTo was typed manually and differs from stored email, save it first
       if (emailTo && emailTo !== lead.email) {
@@ -254,25 +295,40 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
       const res = await fetch(`/api/leads/${lead.id}/send-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emailNumber: emailIdx }),
+        body: JSON.stringify({ emailNumber: emailIdx, scheduledFor }),
       })
       const data = await res.json()
       if (res.ok) {
+        if (data.scheduled) {
+          const when = data.scheduled_for ? format(new Date(data.scheduled_for), 'dd MMM yyyy HH:mm', { locale: nl }) : 'gekozen tijd'
+          setSendSuccess(`Email ${emailIdx} ingepland voor ${when}`)
+          return
+        }
         setLead(l => ({
           ...l,
           status: 'sent',
           crm_status: 'contacted',
           email_sequence_index: (l.email_sequence_index ?? 0) + 1,
           next_followup_at: data.next_followup_at,
-          [`email${emailIdx}_sent_at`]: new Date().toISOString(),
+          [`email${emailIdx}_sent_at`]: data.sent_at ?? new Date().toISOString(),
         }))
         if (emailIdx < 4) setActiveEmailTab(emailIdx)  // jump to next email
+        setSendSuccess(`Email ${emailIdx} verstuurd`)
       } else {
         setSendError(data.error ?? 'Onbekende fout')
       }
     } finally {
       setSending(false)
     }
+  }
+
+  async function updateVariantType(type: 'text_only' | 'painpoint_screenshot') {
+    await fetch(`/api/leads/${lead.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email1_variant_type: type }),
+    }).catch(() => {})
+    setLead(l => ({ ...l, email1_variant_type: type }))
   }
 
   async function stopSequence() {
@@ -558,6 +614,34 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
 
               return (
                 <div className="space-y-4">
+                  {/* Delivery type selector (email 1 only) */}
+                  {activeEmailTab === 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-white/40">Email 1 type</p>
+                      <div className="flex gap-2">
+                        {(['text_only', 'painpoint_screenshot'] as const).map(type => (
+                          <button
+                            key={type}
+                            onClick={() => updateVariantType(type)}
+                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
+                              (lead.email1_variant_type ?? 'text_only') === type
+                                ? 'border-brand text-brand bg-brand/10'
+                                : 'border-subtle text-white/40 hover:text-white/60'
+                            }`}
+                          >
+                            {type === 'text_only' ? 'Tekst only' : 'Met screenshot'}
+                          </button>
+                        ))}
+                      </div>
+                      {(lead.email1_variant_type ?? 'text_only') === 'painpoint_screenshot' && !lead.painpoint_screenshot_url && (
+                        <p className="text-yellow-400/80 text-xs">⚠ Geen screenshot URL — valt terug op tekst only bij verzending</p>
+                      )}
+                      {(lead.email1_variant_type ?? 'text_only') === 'painpoint_screenshot' && lead.painpoint_screenshot_url && (
+                        <img src={lead.painpoint_screenshot_url} alt="Painpoint screenshot" className="max-w-[180px] rounded border border-subtle mt-1" />
+                      )}
+                    </div>
+                  )}
+
                   {/* A/B variants (email 1 only) */}
                   {activeEmailTab === 0 && (
                     <div className="flex items-center gap-2 flex-wrap">
@@ -627,17 +711,75 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                           className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
                         />
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="space-y-2">
+                        <p className="text-xs text-white/40">Verzendmodus</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSendMode('now')}
+                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
+                              sendMode === 'now'
+                                ? 'border-white/25 bg-white/10 text-white'
+                                : 'border-subtle text-white/45 hover:text-white/70'
+                            }`}
+                          >
+                            Nu versturen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSendMode('schedule')
+                              if (!scheduledAtLocal) setScheduledAtLocal(defaultScheduledTimeLocal())
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
+                              sendMode === 'schedule'
+                                ? 'border-white/25 bg-white/10 text-white'
+                                : 'border-subtle text-white/45 hover:text-white/70'
+                            }`}
+                          >
+                            Inplannen
+                          </button>
+                        </div>
+                      </div>
+
+                      {sendMode === 'schedule' && (
+                        <div>
+                          <label className="block text-xs text-white/40 mb-1.5">Verstuur op</label>
+                          <input
+                            type="datetime-local"
+                            value={scheduledAtLocal}
+                            onChange={(e) => setScheduledAtLocal(e.target.value)}
+                            className="w-full max-w-[280px] bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20"
+                          />
+                          <p className="text-xs text-white/30 mt-1">Alleen tussen 07:00 en 18:00</p>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-3 flex-wrap">
                         <button
-                          onClick={() => sendEmail(activeEmailTab + 1)}
-                          disabled={sending || !emailTo || !email.subject || !email.body}
+                          onClick={() => {
+                            if (sendMode === 'schedule') {
+                              const parsed = validateScheduledLocal(scheduledAtLocal)
+                              if (!parsed.ok) {
+                                setSendError(parsed.error)
+                                return
+                              }
+                              sendEmail(activeEmailTab + 1, parsed.iso)
+                              return
+                            }
+                            sendEmail(activeEmailTab + 1)
+                          }}
+                          disabled={sending || !emailTo || !email.subject || !email.body || (sendMode === 'schedule' && !scheduledAtLocal)}
                           className="px-5 py-2 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         >
                           {sending ? (
                             <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Versturen…</>
-                          ) : `Stuur email ${activeEmailTab + 1} →`}
+                          ) : sendMode === 'schedule'
+                            ? `Plan email ${activeEmailTab + 1}`
+                            : `Stuur email ${activeEmailTab + 1} →`}
                         </button>
                         {sendError && <span className="text-red-400 text-sm">{sendError}</span>}
+                        {sendSuccess && <span className="text-green-400 text-sm">{sendSuccess}</span>}
                       </div>
                     </div>
                   )}

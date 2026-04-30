@@ -28,7 +28,7 @@ export async function PATCH(
   const supabase = createServerSupabaseClient()
   const body = await request.json()
   // Whitelist patchable fields
-  const allowed = ['crm_status', 'selected_variant', 'sequence_stopped', 'email']
+  const allowed = ['crm_status', 'selected_variant', 'sequence_stopped', 'email', 'email1_variant_type', 'painpoint_screenshot_url']
   const update: Record<string, unknown> = {}
   for (const key of allowed) {
     if (key in body) update[key] = body[key]

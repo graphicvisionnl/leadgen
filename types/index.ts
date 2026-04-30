@@ -90,6 +90,9 @@ export interface Lead {
   email4_sent_at: string | null
   email_variants: EmailVariant[] | null
   selected_variant: number | null
+  // Email 1 A/B variant
+  email1_variant_type: 'text_only' | 'painpoint_screenshot' | null
+  painpoint_screenshot_url: string | null
   // Reply tracking
   reply_received_at: string | null
   reply_text: string | null

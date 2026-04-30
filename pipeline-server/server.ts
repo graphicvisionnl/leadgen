@@ -228,6 +228,113 @@ function loadSkill(filename: string): string {
 
 async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
+const WORKDAY_TIMEZONE = 'Europe/Amsterdam'
+const WORKDAY_START_MINUTES = 7 * 60
+const WORKDAY_END_MINUTES = 18 * 60
+const SCHEDULED_EMAILS_SETTING_KEY = 'scheduled_emails_v1'
+
+type EmailNumber = 1 | 2 | 3 | 4
+
+interface ScheduledEmailJob {
+  leadId: string
+  emailNumber: EmailNumber
+  scheduledFor: string
+  createdAt: string
+}
+
+function getMinutesInAmsterdam(date: Date): number {
+  const parts = new Intl.DateTimeFormat('nl-NL', {
+    timeZone: WORKDAY_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+
+  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '-1')
+  const minute = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '-1')
+  return hour * 60 + minute
+}
+
+function isWithinWorkingHours(date: Date): boolean {
+  const minutes = getMinutesInAmsterdam(date)
+  return minutes >= WORKDAY_START_MINUTES && minutes < WORKDAY_END_MINUTES
+}
+
+function parseScheduledFor(raw: unknown): { ok: true; iso: string; date: Date } | { ok: false; error: string } {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, error: 'Ongeldige geplande tijd' }
+  }
+
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) {
+    return { ok: false, error: 'Ongeldige geplande tijd' }
+  }
+
+  if (date.getTime() <= Date.now()) {
+    return { ok: false, error: 'Geplande tijd moet in de toekomst liggen' }
+  }
+
+  if (!isWithinWorkingHours(date)) {
+    return { ok: false, error: 'Je kunt alleen plannen tussen 07:00 en 18:00 (Amsterdam tijd)' }
+  }
+
+  return { ok: true, iso: date.toISOString(), date }
+}
+
+function normalizeEmailNumber(raw: unknown): EmailNumber | null {
+  const num = Number(raw)
+  return num === 1 || num === 2 || num === 3 || num === 4 ? num : null
+}
+
+function parseScheduledJobs(value: string | null | undefined): ScheduledEmailJob[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+
+    return parsed.flatMap((item: any) => {
+      const emailNumber = normalizeEmailNumber(item?.emailNumber)
+      const scheduled = typeof item?.scheduledFor === 'string' ? new Date(item.scheduledFor) : null
+      if (!item?.leadId || !emailNumber || !scheduled || Number.isNaN(scheduled.getTime())) return []
+      return [{
+        leadId: String(item.leadId),
+        emailNumber,
+        scheduledFor: scheduled.toISOString(),
+        createdAt: typeof item?.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+async function getScheduledEmailJobs(): Promise<ScheduledEmailJob[]> {
+  const { data, error } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', SCHEDULED_EMAILS_SETTING_KEY)
+    .maybeSingle()
+
+  if (error) {
+    log('Scheduler', `Kon geplande e-mails niet laden: ${error.message}`)
+    return []
+  }
+
+  return parseScheduledJobs(data?.value).sort(
+    (a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime()
+  )
+}
+
+async function saveScheduledEmailJobs(jobs: ScheduledEmailJob[]) {
+  const sorted = [...jobs].sort(
+    (a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime()
+  )
+  await supabase.from('settings').upsert(
+    [{ key: SCHEDULED_EMAILS_SETTING_KEY, value: JSON.stringify(sorted) }],
+    { onConflict: 'key' }
+  )
+}
+
 // ─── Phase 1: Apify ──────────────────────────────────────────────────────────
 async function phase1(runId: string, niche: string, city: string, maxLeads: number) {
   log('Phase 1', `Scraping "${niche}" in "${city}" (max ${maxLeads})`)
@@ -843,12 +950,16 @@ Geef ALLEEN dit JSON terug, niets anders:
   if (!jsonMatch) throw new Error('Geen JSON in sequence response')
   const emails = JSON.parse(jsonMatch[0])
 
+  // Randomly assign variant type 50/50 if not already set
+  const variantType: string = lead.email1_variant_type ?? (Math.random() < 0.5 ? 'text_only' : 'painpoint_screenshot')
+
   await supabase.from('leads').update({
     email1_subject: emails.email1.subject, email1_body: emails.email1.body,
     email2_subject: emails.email2.subject, email2_body: emails.email2.body,
     email3_subject: emails.email3.subject, email3_body: emails.email3.body,
     email4_subject: emails.email4.subject, email4_body: emails.email4.body,
     email_subject: emails.email1.subject,  email_body: emails.email1.body,
+    email1_variant_type: variantType,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 }
@@ -944,7 +1055,7 @@ function buildEmailHtml(bodyHtml: string): string {
 </table></td></tr></table></body></html>`
 }
 
-async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
+async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   const subjectKey = `email${emailNumber}_subject` as const
   const bodyKey = `email${emailNumber}_body` as const
   let body: string = lead[bodyKey] ?? lead.email_body ?? ''
@@ -991,9 +1102,10 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     .replace(/\n+Met vriendelijke groet[\s\S]*$/i, '')
     .trimEnd()
 
-  const signature = emailNumber === 1
-    ? `\n\n– Graphic Vision`
-    : `\n\nMet vriendelijke groet,\nGraphic Vision\ngraphicvision.nl`
+  // Emails 1/3/4 use short plain-text signature; email 2 (reply) uses formal sign-off
+  const signature = emailNumber === 2
+    ? `\n\nMet vriendelijke groet,\nGraphic Vision\ngraphicvision.nl`
+    : `\n\n– Graphic Vision`
 
   body = body + signature
 
@@ -1004,16 +1116,34 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     auth: { user: account.email, pass: account.pass },
   })
 
-  // Email 1 = plain text only (best deliverability for cold outreach)
-  // Email 2+ = branded HTML template
+  // Email 1 = plain text, optional screenshot attachment
+  // Email 2 (reply) = branded HTML template
+  // Emails 3+4 = plain text only (human/low-pressure reminders)
   let mailOptions: any
   if (emailNumber === 1) {
+    const isScreenshotVariant = lead.email1_variant_type === 'painpoint_screenshot' && lead.painpoint_screenshot_url
+    let attachments: any[] = []
+    if (isScreenshotVariant) {
+      try {
+        const imgResponse = await fetch(lead.painpoint_screenshot_url)
+        if (imgResponse.ok) {
+          const imgBuffer = Buffer.from(await imgResponse.arrayBuffer())
+          attachments = [{ filename: 'site-check.png', content: imgBuffer, contentType: 'image/png' }]
+          log('Mail', `Screenshot bijgevoegd (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name}`)
+        } else {
+          log('Mail', `Screenshot URL niet bereikbaar (${imgResponse.status}) voor ${lead.company_name} — stuur zonder bijlage`)
+        }
+      } catch (e) {
+        log('Mail', `Screenshot ophalen mislukt voor ${lead.company_name}: ${e} — stuur zonder bijlage`)
+      }
+    }
     mailOptions = {
       from: `${account.name} <${account.email}>`,
       to: lead.email,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       text: body,
+      ...(attachments.length ? { attachments } : {}),
     }
   } else if (emailNumber === 2 && isThreadedReply) {
     // Send as threaded reply — same account, Re: subject, In-Reply-To header
@@ -1028,6 +1158,15 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
         'In-Reply-To': lead.reply_message_id,
         'References': lead.reply_message_id,
       },
+    }
+  } else if (emailNumber === 3 || emailNumber === 4) {
+    // Plain text reminders — no HTML, no logo, human tone
+    mailOptions = {
+      from: `${account.name} <${account.email}>`,
+      to: lead.email,
+      bcc: 'graphicvisionnl@gmail.com',
+      subject,
+      text: body,
     }
   } else {
     mailOptions = {
@@ -1054,17 +1193,20 @@ async function sendEmailForLead(lead: any, emailNumber: 1 | 2 | 3 | 4) {
     ? new Date(Date.now() + followupMs[emailNumber]).toISOString()
     : null
 
+  const sentAt = new Date().toISOString()
+
   await supabase.from('leads').update({
     status: 'sent',
     crm_status: 'contacted',
     email_sequence_index: emailNumber,
-    [sentAtField]: new Date().toISOString(),
+    [sentAtField]: sentAt,
     next_followup_at,
     sequence_stopped: emailNumber === 4 ? true : false,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
   log('Mail', `Email ${emailNumber} verstuurd naar ${lead.email} (${lead.company_name})${next_followup_at ? ` — volgende: ${new Date(next_followup_at).toLocaleString('nl-NL')}` : ' — sequentie afgerond'}`)
+  return { next_followup_at, sent_at: sentAt }
 }
 
 // ─── Reply classification ─────────────────────────────────────────────────────
@@ -1238,6 +1380,13 @@ Geef ALLEEN dit JSON terug:
   }).eq('id', lead.id)
 }
 
+// Extract raw email address from "Display Name <email@host>" or plain "email@host"
+function extractEmail(raw: string): string {
+  if (!raw) return ''
+  const m = raw.match(/<([^>@\s]+@[^>\s]+)>/)
+  return (m ? m[1] : raw).toLowerCase().trim()
+}
+
 // ─── IMAP reply checker ───────────────────────────────────────────────────────
 async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
   const client = new ImapFlow({
@@ -1263,14 +1412,19 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
     const lock = await client.getMailboxLock('INBOX')
     try {
       const uids = await client.search({ seen: false })
+      log('IMAP', `${imapUser}: ${Array.isArray(uids) ? uids.length : 0} ongelezen bericht(en)`)
       if (!uids || !Array.isArray(uids) || uids.length === 0) return 0
 
       for await (const msg of client.fetch(uids as number[], { envelope: true, bodyStructure: true, bodyParts: ['1', 'TEXT'] })) {
-        const fromEmail = msg.envelope?.from?.[0]?.address?.toLowerCase()
+        // Extract raw address, handling "Display Name <email>" format
+        const fromRaw = msg.envelope?.from?.[0]?.address ?? msg.envelope?.from?.[0]?.name ?? ''
+        const fromEmail = extractEmail(fromRaw)
         if (!fromEmail) continue
 
         // Skip any of our own sending accounts
         if (fromEmail === imapUser.toLowerCase()) continue
+
+        log('IMAP', `${imapUser}: bericht van ${fromEmail} (subject: "${msg.envelope?.subject ?? ''}") — zoek naar lead`)
 
         // Match to a lead by email address with open sequence
         const { data: lead } = await supabase
@@ -1278,10 +1432,16 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
           .select('*')
           .eq('email', fromEmail)
           .eq('status', 'sent')
+          .is('reply_received_at', null)
           .not('crm_status', 'in', '("rejected","replied","interested","closed")')
           .single()
 
-        if (!lead) continue
+        if (!lead) {
+          log('IMAP', `${imapUser}: geen openstaande lead gevonden voor ${fromEmail} — overgeslagen`)
+          continue
+        }
+
+        log('IMAP', `${imapUser}: match → ${lead.company_name} (${lead.id})`)
 
         const bodyBuffer = msg.bodyParts?.get('1') ?? msg.bodyParts?.get('TEXT')
         const rawBody = bodyBuffer ? Buffer.from(bodyBuffer as any).toString('utf-8') : msg.envelope?.subject ?? ''
@@ -1290,11 +1450,11 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
         const replyMessageId = msg.envelope?.messageId ?? null
 
         await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true })
-
-        log('IMAP', `Reactie van ${lead.company_name} (${fromEmail}) → inbox ${imapUser}`)
         found++
 
-        processReply(lead, rawBody, replyMessageId, imapUser).catch(e => log('IMAP', `processReply fout: ${e}`))
+        processReply(lead, rawBody, replyMessageId, imapUser)
+          .then(() => log('IMAP', `${imapUser}: reactie van ${lead.company_name} verwerkt`))
+          .catch(e => log('IMAP', `processReply fout voor ${lead.company_name}: ${e}`))
       }
     } finally {
       lock.release()
@@ -1756,17 +1916,106 @@ Geef ALLEEN de e-mailtekst, geen onderwerpregel, geen uitleg, geen markdown.`
   }
 })
 
+async function queueScheduledEmail(leadId: string, emailNumber: EmailNumber, scheduledForIso: string) {
+  const jobs = await getScheduledEmailJobs()
+  const filtered = jobs.filter((job) => !(job.leadId === leadId && job.emailNumber === emailNumber))
+  filtered.push({
+    leadId,
+    emailNumber,
+    scheduledFor: scheduledForIso,
+    createdAt: new Date().toISOString(),
+  })
+  await saveScheduledEmailJobs(filtered)
+}
+
+let scheduledEmailTickRunning = false
+
+async function sendDueScheduledEmails() {
+  if (scheduledEmailTickRunning) return
+  scheduledEmailTickRunning = true
+  try {
+    const jobs = await getScheduledEmailJobs()
+    if (!jobs.length) return
+
+    const now = Date.now()
+    const due = jobs.filter((job) => new Date(job.scheduledFor).getTime() <= now)
+    if (!due.length) return
+
+    const pending = jobs.filter((job) => new Date(job.scheduledFor).getTime() > now)
+    const retry: ScheduledEmailJob[] = []
+    log('Scheduler', `${due.length} geplande e-mail(s) klaar om te versturen`)
+
+    for (const job of due) {
+      try {
+        const { data: lead, error } = await supabase.from('leads').select('*').eq('id', job.leadId).single()
+        if (error || !lead) {
+          log('Scheduler', `Lead ${job.leadId} niet gevonden, planning verwijderd`)
+          continue
+        }
+
+        const sentField = `email${job.emailNumber}_sent_at`
+        if (lead[sentField]) {
+          log('Scheduler', `${lead.company_name ?? job.leadId} — email ${job.emailNumber} al verstuurd, planning verwijderd`)
+          continue
+        }
+        if (!lead.email) {
+          log('Scheduler', `${lead.company_name ?? job.leadId} — geen e-mailadres, planning verwijderd`)
+          continue
+        }
+        if (lead.sequence_stopped) {
+          log('Scheduler', `${lead.company_name ?? job.leadId} — sequentie gestopt, planning verwijderd`)
+          continue
+        }
+        if (lead.reply_received_at) {
+          log('Scheduler', `${lead.company_name ?? job.leadId} — reactie ontvangen, geplande email ${job.emailNumber} geannuleerd`)
+          continue
+        }
+        if (lead.crm_status === 'replied' || lead.crm_status === 'interested' || lead.crm_status === 'closed') {
+          log('Scheduler', `${lead.company_name ?? job.leadId} — crm_status=${lead.crm_status}, geplande email ${job.emailNumber} geannuleerd`)
+          continue
+        }
+
+        await sendEmailForLead(lead, job.emailNumber)
+        log('Scheduler', `Geplande email ${job.emailNumber} verstuurd naar ${lead.company_name ?? lead.email}`)
+        await sleep(5_000)
+      } catch (e) {
+        log('Scheduler', `Fout bij geplande email ${job.emailNumber} voor ${job.leadId}: ${e}`)
+        retry.push(job)
+      }
+    }
+
+    await saveScheduledEmailJobs([...pending, ...retry])
+  } finally {
+    scheduledEmailTickRunning = false
+  }
+}
+
 app.post('/send-email/:id', async (req, res) => {
   const { id } = req.params
-  const { emailNumber = 1 } = req.body
+  const emailNumber = normalizeEmailNumber(req.body?.emailNumber ?? 1)
+  const scheduledFor = req.body?.scheduledFor
 
   const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
   if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
   if (!lead.email) return res.status(400).json({ error: 'Geen e-mailadres' })
+  if (!emailNumber) return res.status(400).json({ error: 'Ongeldig emailNumber (1-4)' })
+
+  if (scheduledFor) {
+    const parsed = parseScheduledFor(scheduledFor)
+    if (!parsed.ok) return res.status(400).json({ error: parsed.error })
+    try {
+      await queueScheduledEmail(id, emailNumber, parsed.iso)
+      log('Scheduler', `Email ${emailNumber} ingepland voor ${lead.company_name} op ${new Date(parsed.iso).toLocaleString('nl-NL')}`)
+      return res.json({ success: true, scheduled: true, scheduled_for: parsed.iso })
+    } catch (e) {
+      log('Scheduler', `Planning mislukt voor ${lead.company_name}: ${e}`)
+      return res.status(500).json({ error: 'Inplannen mislukt' })
+    }
+  }
 
   try {
-    await sendEmailForLead(lead, emailNumber as 1 | 2 | 3 | 4)
-    res.json({ success: true })
+    const result = await sendEmailForLead(lead, emailNumber)
+    res.json({ success: true, ...result })
   } catch (e) {
     log('Mail', `Fout bij versturen naar ${lead.email}: ${e}`)
     res.status(500).json({ error: String(e) })
@@ -1816,28 +2065,46 @@ async function sendDueFollowups() {
   log('Followup', `${leads.length} lead(s) klaar voor automatische herinnering`)
 
   for (const lead of leads) {
+    // Re-fetch lead right before sending — triple guard against sending to leads that replied
+    const { data: freshLead } = await supabase.from('leads').select('*').eq('id', lead.id).single()
+    if (!freshLead) { log('Followup', `Lead ${lead.id} niet meer gevonden`); continue }
+    if (freshLead.sequence_stopped) {
+      log('Followup', `${freshLead.company_name} — sequentie al gestopt, overgeslagen`)
+      continue
+    }
+    if (freshLead.reply_received_at) {
+      log('Followup', `${freshLead.company_name} — reactie ontvangen op ${freshLead.reply_received_at}, stop auto-followup`)
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', freshLead.id)
+      continue
+    }
+    if (freshLead.crm_status === 'replied' || freshLead.crm_status === 'interested' || freshLead.crm_status === 'closed') {
+      log('Followup', `${freshLead.company_name} — crm_status=${freshLead.crm_status}, stop auto-followup`)
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', freshLead.id)
+      continue
+    }
+
     // email_sequence_index 1 → send email 3 (reminder 1)
     // email_sequence_index 3 → send email 4 (reminder 2)
-    const nextEmail = lead.email_sequence_index === 1 ? 3 : lead.email_sequence_index === 3 ? 4 : null
+    const nextEmail = freshLead.email_sequence_index === 1 ? 3 : freshLead.email_sequence_index === 3 ? 4 : null
     if (!nextEmail) {
       // Unknown state — stop to avoid loop
-      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', freshLead.id)
       continue
     }
 
     const bodyKey = `email${nextEmail}_body`
-    if (!lead[bodyKey] || !lead.email) {
-      log('Followup', `${lead.company_name} — email ${nextEmail} body ontbreekt, overgeslagen`)
-      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', lead.id)
+    if (!freshLead[bodyKey] || !freshLead.email) {
+      log('Followup', `${freshLead.company_name} — email ${nextEmail} body ontbreekt, overgeslagen`)
+      await supabase.from('leads').update({ sequence_stopped: true, next_followup_at: null }).eq('id', freshLead.id)
       continue
     }
 
     try {
-      await sendEmailForLead(lead, nextEmail as 1 | 2 | 3 | 4)
-      log('Followup', `Herinnering ${nextEmail} verstuurd naar ${lead.company_name}`)
+      await sendEmailForLead(freshLead, nextEmail as 1 | 2 | 3 | 4)
+      log('Followup', `Herinnering ${nextEmail} verstuurd naar ${freshLead.company_name}`)
       await sleep(15_000) // 15s between sends
     } catch (e) {
-      log('Followup', `Fout bij ${lead.company_name}: ${e}`)
+      log('Followup', `Fout bij ${freshLead.company_name}: ${e}`)
     }
   }
 }
@@ -1851,6 +2118,16 @@ setInterval(() => {
 setTimeout(() => {
   sendDueFollowups().catch(e => log('Followup', `Startup check fout: ${e}`))
 }, 2 * 60 * 1000)
+
+// Run scheduled email queue every minute
+setInterval(() => {
+  sendDueScheduledEmails().catch(e => log('Scheduler', `Interval fout: ${e}`))
+}, 60 * 1000)
+
+// Also run once shortly after startup
+setTimeout(() => {
+  sendDueScheduledEmails().catch(e => log('Scheduler', `Startup check fout: ${e}`))
+}, 30 * 1000)
 
 process.on('uncaughtException', (err) => {
   log('Server', `Uncaught exception (server blijft draaien): ${err.message}`)
