@@ -51,6 +51,48 @@ create table if not exists settings (
 create index if not exists leads_status_idx on leads(status);
 create index if not exists leads_created_at_idx on leads(created_at desc);
 create index if not exists leads_pipeline_run_id_idx on leads(pipeline_run_id);
+create unique index if not exists leads_website_url_unique_idx on leads(website_url) where website_url is not null;
+
+-- Existing installations: add columns used by the current dashboard, pipeline,
+-- email sequence, A/B screenshot test, reply detection, and scheduling flows.
+alter table pipeline_runs add column if not exists lock_key text;
+
+alter table leads add column if not exists phone text;
+alter table leads add column if not exists segment text;
+alter table leads add column if not exists whatsapp_url text;
+alter table leads add column if not exists facebook_url text;
+alter table leads add column if not exists instagram_url text;
+alter table leads add column if not exists lead_score int;
+alter table leads add column if not exists hot_lead boolean;
+alter table leads add column if not exists score_breakdown jsonb;
+alter table leads add column if not exists crm_status text default 'not_contacted';
+alter table leads add column if not exists email_sequence_index int default 0;
+alter table leads add column if not exists next_followup_at timestamptz;
+alter table leads add column if not exists sequence_stopped boolean default false;
+alter table leads add column if not exists email1_subject text;
+alter table leads add column if not exists email1_body text;
+alter table leads add column if not exists email2_subject text;
+alter table leads add column if not exists email2_body text;
+alter table leads add column if not exists email3_subject text;
+alter table leads add column if not exists email3_body text;
+alter table leads add column if not exists email4_subject text;
+alter table leads add column if not exists email4_body text;
+alter table leads add column if not exists email1_sent_at timestamptz;
+alter table leads add column if not exists email2_sent_at timestamptz;
+alter table leads add column if not exists email3_sent_at timestamptz;
+alter table leads add column if not exists email4_sent_at timestamptz;
+alter table leads add column if not exists email_subject text;
+alter table leads add column if not exists email_body text;
+alter table leads add column if not exists email_variants jsonb;
+alter table leads add column if not exists selected_variant int;
+alter table leads add column if not exists email1_variant_type text;
+alter table leads add column if not exists painpoint_screenshot_url text;
+alter table leads add column if not exists reply_received_at timestamptz;
+alter table leads add column if not exists reply_text text;
+alter table leads add column if not exists reply_classification text;
+alter table leads add column if not exists reply_message_id text;
+alter table leads add column if not exists reply_received_by text;
+alter table leads add column if not exists email2_draft_ready boolean default false;
 
 -- =====================
 -- Default settings

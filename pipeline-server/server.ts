@@ -212,8 +212,13 @@ function log(phase: string, msg: string) {
 }
 
 function normalizeUrl(url: string): string {
-  if (!url.startsWith('http')) return `https://${url}`
-  return url
+  const withProtocol = url.startsWith('http') ? url : `https://${url}`
+  const parsed = new URL(withProtocol)
+  parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, '')
+  parsed.hash = ''
+  parsed.search = ''
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/'
+  return parsed.toString().replace(/\/$/, '')
 }
 
 function isValidUrl(url: string): boolean {
@@ -247,6 +252,14 @@ const WORKDAY_END_MINUTES = 18 * 60
 const SCHEDULED_EMAILS_SETTING_KEY = 'scheduled_emails_v1'
 
 type EmailNumber = 1 | 2 | 3 | 4
+type LeadSegment = 'no_website' | 'low_reviews' | 'ideal' | 'high_reviews' | 'high_rating'
+
+interface SegmentEmailTemplate {
+  subject: string
+  body: string
+  segment: LeadSegment
+  template: string
+}
 
 interface ScheduledEmailJob {
   leadId: string
@@ -299,6 +312,100 @@ function normalizeEmailNumber(raw: unknown): EmailNumber | null {
   return num === 1 || num === 2 || num === 3 || num === 4 ? num : null
 }
 
+function normalizeLeadSegment(raw: unknown): LeadSegment {
+  return raw === 'no_website' ||
+    raw === 'low_reviews' ||
+    raw === 'ideal' ||
+    raw === 'high_reviews' ||
+    raw === 'high_rating'
+    ? raw
+    : 'ideal'
+}
+
+function leadSearchLine(lead: any): string {
+  const niche = lead.niche || 'jullie branche'
+  const city = lead.city || 'jullie regio'
+  return `Ik kwam jullie tegen toen ik zocht naar ${niche} in ${city}`
+}
+
+function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
+  const segment = normalizeLeadSegment(lead.segment)
+  const intro = leadSearchLine(lead)
+
+  const templates: Record<LeadSegment, Omit<SegmentEmailTemplate, 'segment'>> = {
+    ideal: {
+      template: 'ideal',
+      subject: 'Snelle vraag over jullie website',
+      body: `${intro}
+
+1 ding viel me op
+
+Jullie website stuurt bezoekers niet echt duidelijk naar een volgende stap
+waardoor mensen waarschijnlijk afhaken
+
+Zal ik laten zien hoe dit beter ingericht kan worden?
+
+– Graphic Vision`,
+    },
+    no_website: {
+      template: 'no_website',
+      subject: 'Snelle vraag',
+      body: `${intro}
+
+Viel me op dat jullie nog geen echte website hebben
+
+Daardoor mis je waarschijnlijk klanten die via Google zoeken
+
+Zal ik laten zien hoe je dit simpel kunt oplossen?
+
+– Graphic Vision`,
+    },
+    low_reviews: {
+      template: 'low_reviews',
+      subject: 'Korte vraag',
+      body: `${intro}
+
+Wat me opviel is dat jullie nog weinig reviews hebben
+
+Daardoor kan het lastig zijn om vertrouwen te winnen bij nieuwe klanten
+
+Een sterke website kan dat deels opvangen
+
+Zal ik laten zien wat ik bedoel?
+
+– Graphic Vision`,
+    },
+    high_reviews: {
+      template: 'high_reviews',
+      subject: 'Snelle vraag over jullie site',
+      body: `${intro}
+
+Jullie hebben al behoorlijk wat reviews
+
+Alleen de website zelf laat nog kansen liggen om meer aanvragen eruit te halen
+
+Zal ik laten zien wat ik bedoel?
+
+– Graphic Vision`,
+    },
+    high_rating: {
+      template: 'high_rating',
+      subject: 'Korte vraag',
+      body: `${intro}
+
+Ziet er goed uit wat jullie doen
+
+Alleen op de website zelf zie ik nog kansen om meer uit bezoekers te halen
+
+Zal ik dat even laten zien?
+
+– Graphic Vision`,
+    },
+  }
+
+  return { ...templates[segment], segment }
+}
+
 function parseScheduledJobs(value: string | null | undefined): ScheduledEmailJob[] {
   if (!value) return []
   try {
@@ -346,6 +453,14 @@ async function saveScheduledEmailJobs(jobs: ScheduledEmailJob[]) {
     [{ key: SCHEDULED_EMAILS_SETTING_KEY, value: JSON.stringify(sorted) }],
     { onConflict: 'key' }
   )
+}
+
+async function removeScheduledEmailJobsForLead(leadId: string): Promise<number> {
+  const jobs = await getScheduledEmailJobs()
+  const remaining = jobs.filter((job) => job.leadId !== leadId)
+  const removed = jobs.length - remaining.length
+  if (removed > 0) await saveScheduledEmailJobs(remaining)
+  return removed
 }
 
 // ─── Phase 1: Apify ──────────────────────────────────────────────────────────
@@ -947,24 +1062,6 @@ async function phase4(runId: string) {
 
 // Reusable: generate the 4-email sequence for a lead (same logic as the route)
 async function generateEmailSequenceForLead(lead: any) {
-  const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
-  const issues: string[] = []
-  if (breakdown.outdated_feel) issues.push('de website heeft een verouderde uitstraling')
-  if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action boven de vouw')
-  if (!breakdown.mobile_friendly) issues.push('de mobiele versie voelt verouderd aan')
-  if (!breakdown.email_found && !lead.email) issues.push('contactgegevens zijn moeilijk te vinden')
-  const issueText = issues.slice(0, 2).join(' en ') || 'verouderde website'
-
-  const improvements: string[] = []
-  if (breakdown.outdated_feel) improvements.push('moderne layout en uitstraling')
-  if (!breakdown.has_cta) improvements.push('duidelijke call-to-action toegevoegd')
-  if (!breakdown.mobile_friendly) improvements.push('volledig mobiel geoptimaliseerd')
-  if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
-  const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
-
-  const shortName = (lead.company_name ?? '').split(/[|&·]/)[0].trim()
-    .replace(/\s+(loodgieter|installateur|schilder|dakdekker|aannemer|cv|bv|vof|nl)\b.*/i, '').trim()
-
   const emailPrefix = (lead.email ?? '').split('@')[0].toLowerCase()
   const genericPrefixes = ['info', 'contact', 'hello', 'hallo', 'mail', 'post', 'office', 'admin', 'support', 'service', 'team', 'sales', 'marketing', 'hoi', 'algemeen', 'receptie', 'secretariaat', 'welkom', 'webmaster']
   const isGeneric = !lead.email || genericPrefixes.some((p: string) => emailPrefix === p || emailPrefix.startsWith(p + '.'))
@@ -975,26 +1072,21 @@ async function generateEmailSequenceForLead(lead: any) {
       : null
   })()
   const greeting = firstName ? `Hey ${firstName},` : 'Hey,'
+  const email1 = generateEmail1ForSegment(lead)
+  log('Mail', `Lead ${lead.id} — Email 1 generated using segment: ${email1.segment} — template: ${email1.template}`)
 
-  const prompt = `Je schrijft een koude outreach e-mailreeks namens Graphic Vision voor dit bedrijf:
+  const prompt = `Je schrijft alleen de opvolgmails voor een koude outreach reeks namens Graphic Vision.
 
 Bedrijf: ${lead.company_name}
 Niche: ${lead.niche}
 Stad: ${lead.city ?? 'onbekend'}
-Problemen op hun site: ${issueText}
 
 OPMAAK (verplicht voor alle mails): gebruik lege regels tussen alinea's. Plain text stijl.
 
-MAIL 1 — OUTREACH MAIL (dag 0)
-Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
-- Begin EXACT met: "${greeting}"
-- Zeg dat je ze vond via Google Maps
-- Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
-- Zeg dat je een quick redesign hebt gemaakt
-- Lege regel, dan EXACT: "Wil je dat ik het stuur?" (of vergelijkbare korte nieuwsgierige CTA)
-- Afsluiting EXACT: "– Graphic Vision"
-- GEEN "Met vriendelijke groet", GEEN lange afsluiting
-- Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
+MAIL 1 — AL GEGENEREERD
+Gebruik exact deze subject en body:
+subject="${email1.subject}"
+body=${JSON.stringify(email1.body)}
 
 MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
 Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
@@ -1014,7 +1106,7 @@ MAIL 4 — HERINNERING 2 (dag 6)
 
 Geef ALLEEN dit JSON terug, niets anders:
 {
-  "email1": {"subject": "...", "body": "..."},
+  "email1": {"subject": ${JSON.stringify(email1.subject)}, "body": ${JSON.stringify(email1.body)}},
   "email2": {"subject": "Reactie", "body": "[Wordt gegenereerd na reactie van de lead]"},
   "email3": {"subject": "...", "body": "..."},
   "email4": {"subject": "...", "body": "..."}
@@ -1024,6 +1116,7 @@ Geef ALLEEN dit JSON terug, niets anders:
   const jsonMatch = seqText.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Geen JSON in sequence response')
   const emails = JSON.parse(jsonMatch[0])
+  emails.email1 = { subject: email1.subject, body: email1.body }
 
   // Randomly assign variant type 50/50 if not already set
   const variantType: string = lead.email1_variant_type ?? (Math.random() < 0.5 ? 'text_only' : 'painpoint_screenshot')
@@ -1037,6 +1130,8 @@ Geef ALLEEN dit JSON terug, niets anders:
     email1_variant_type: variantType,
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
+
+  return emails
 }
 
 // Reusable: send a specific email number (1–4) for a lead
@@ -1198,19 +1293,26 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   if (emailNumber === 1) {
     const isScreenshotVariant = lead.email1_variant_type === 'painpoint_screenshot' && lead.painpoint_screenshot_url
     let attachments: any[] = []
+    log('Mail', `Email 1 variant voor ${lead.company_name}: ${lead.email1_variant_type ?? 'text_only'}`)
     if (isScreenshotVariant) {
       try {
         const imgResponse = await fetch(lead.painpoint_screenshot_url)
         if (imgResponse.ok) {
           const imgBuffer = Buffer.from(await imgResponse.arrayBuffer())
-          attachments = [{ filename: 'site-check.png', content: imgBuffer, contentType: 'image/png' }]
-          log('Mail', `Screenshot bijgevoegd (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name}`)
+          if (imgBuffer.length <= 300 * 1024) {
+            attachments = [{ filename: 'site-check.png', content: imgBuffer, contentType: 'image/png' }]
+            log('Mail', `Screenshot bijgevoegd als site-check.png (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name}`)
+          } else {
+            log('Mail', `Screenshot te groot (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name} — stuur zonder bijlage`)
+          }
         } else {
           log('Mail', `Screenshot URL niet bereikbaar (${imgResponse.status}) voor ${lead.company_name} — stuur zonder bijlage`)
         }
       } catch (e) {
         log('Mail', `Screenshot ophalen mislukt voor ${lead.company_name}: ${e} — stuur zonder bijlage`)
       }
+    } else if (lead.email1_variant_type === 'painpoint_screenshot') {
+      log('Mail', `Geen screenshot URL voor ${lead.company_name} — stuur zonder bijlage`)
     }
     mailOptions = {
       from: `${account.name} <${account.email}>`,
@@ -1344,6 +1446,11 @@ async function processReply(lead: any, rawReplyText: string, replyMessageId: str
     ...(receivedByAccount ? { reply_received_by: receivedByAccount } : {}),
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
+
+  const removedJobs = await removeScheduledEmailJobsForLead(lead.id)
+  if (removedJobs > 0) {
+    log('Reply', `${lead.company_name} — ${removedJobs} geplande e-mail(s) geannuleerd na reply`)
+  }
 
   // Stop sequence on rejection
   if (classification === 'not_interested') {
@@ -1737,94 +1844,7 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
 
   try {
-    const breakdown: ScoreBreakdown = lead.score_breakdown ?? {}
-
-    // Specific issues for Email 1 (max 2, no links)
-    const issues: string[] = []
-    if (breakdown.outdated_feel) issues.push('de website heeft een verouderde uitstraling')
-    if (!breakdown.has_cta) issues.push('er is geen duidelijke call-to-action boven de vouw')
-    if (!breakdown.mobile_friendly) issues.push('de mobiele versie voelt verouderd aan')
-    if (!breakdown.email_found && !lead.email) issues.push('contactgegevens zijn moeilijk te vinden')
-    const issueText = issues.slice(0, 2).join(' en ') || 'verouderde website'
-
-    // What was improved — for Email 2
-    const improvements: string[] = []
-    if (breakdown.outdated_feel) improvements.push('moderne layout en uitstraling')
-    if (!breakdown.has_cta) improvements.push('duidelijke call-to-action toegevoegd')
-    if (!breakdown.mobile_friendly) improvements.push('volledig mobiel geoptimaliseerd')
-    if (breakdown.website_exists) improvements.push('betere structuur en hero-sectie')
-    const improvementText = improvements.slice(0, 3).join(', ') || 'betere structuur, moderne uitstraling en duidelijkere CTA'
-
-    const emailPrefix2 = (lead.email ?? '').split('@')[0].toLowerCase()
-    const genericPrefixes2 = ['info', 'contact', 'hello', 'hallo', 'mail', 'post', 'office', 'admin', 'support', 'service', 'team', 'sales', 'marketing', 'hoi', 'algemeen', 'receptie', 'secretariaat', 'welkom', 'webmaster']
-    const isGeneric2 = !lead.email || genericPrefixes2.some((p: string) => emailPrefix2 === p || emailPrefix2.startsWith(p + '.'))
-    const firstName2 = isGeneric2 ? null : (() => {
-      const namePart = emailPrefix2.split(/[._-]/)[0]
-      return (namePart && namePart.length > 1 && /^[a-z]/i.test(namePart))
-        ? namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase()
-        : null
-    })()
-    const greeting2 = firstName2 ? `Hey ${firstName2},` : 'Hey,'
-
-    const prompt = `Je schrijft een koude outreach e-mailreeks namens Graphic Vision voor dit bedrijf:
-
-Bedrijf: ${lead.company_name}
-Niche: ${lead.niche}
-Stad: ${lead.city ?? 'onbekend'}
-Problemen op hun site: ${issueText}
-
-OPMAAK (verplicht voor alle mails): gebruik lege regels tussen alinea's. Plain text stijl.
-
-MAIL 1 — OUTREACH MAIL (dag 0)
-Stijl: casual, kort, nieuwsgierig. Max 4-5 zinnen. GEEN links, GEEN afbeeldingen.
-- Begin EXACT met: "${greeting2}"
-- Zeg dat je ze vond via Google Maps
-- Noem 1-2 specifieke problemen (gebruik: ${issueText}) — concreet, niet vaag
-- Zeg dat je een quick redesign hebt gemaakt
-- Lege regel, dan EXACT: "Wil je dat ik het stuur?" (of vergelijkbare korte nieuwsgierige CTA)
-- Afsluiting EXACT: "– Graphic Vision"
-- GEEN "Met vriendelijke groet", GEEN lange afsluiting
-- Schrijf alsof je een vriend bent die een tip geeft, niet een bureau dat verkoopt
-
-MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
-Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
-
-MAIL 3 — HERINNERING 1 (dag 3)
-- Begin met "${greeting2}"
-- Super kort — max 2-3 zinnen
-- Verwijs terug naar mail 1, vraag of ze het gemist hebben
-- GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Graphic Vision"
-
-MAIL 4 — HERINNERING 2 (dag 6)
-- Begin met "${greeting2}"
-- Sluit het dossier af — kort en vriendelijk
-- GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Graphic Vision"
-
-Geef ALLEEN dit JSON terug, niets anders:
-{
-  "email1": {"subject": "...", "body": "..."},
-  "email2": {"subject": "Reactie", "body": "[Wordt gegenereerd na reactie van de lead]"},
-  "email3": {"subject": "...", "body": "..."},
-  "email4": {"subject": "...", "body": "..."}
-}`
-
-    const seqText2 = await callGemini({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
-    const jsonMatch = seqText2.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error(`Geen JSON in response: ${seqText2.slice(0, 200)}`)
-    const emails = JSON.parse(jsonMatch[0])
-
-    await supabase.from('leads').update({
-      email1_subject: emails.email1.subject, email1_body: emails.email1.body,
-      email2_subject: emails.email2.subject, email2_body: emails.email2.body,
-      email3_subject: emails.email3.subject, email3_body: emails.email3.body,
-      email4_subject: emails.email4.subject, email4_body: emails.email4.body,
-      // Backwards compat — email_subject/body maps to email1
-      email_subject: emails.email1.subject, email_body: emails.email1.body,
-      updated_at: new Date().toISOString(),
-    }).eq('id', id)
-
+    const emails = await generateEmailSequenceForLead(lead)
     log('Mail', `Sequentie gegenereerd voor ${lead.company_name}`)
     res.json({ success: true, emails })
   } catch (e) {

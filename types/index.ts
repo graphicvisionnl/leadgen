@@ -25,6 +25,13 @@ export type ReplyClassification =
   | 'out_of_office'
   | 'other'
 
+export type LeadSegment =
+  | 'no_website'
+  | 'low_reviews'
+  | 'ideal'
+  | 'high_reviews'
+  | 'high_rating'
+
 export interface ScoreBreakdown {
   website_exists: boolean
   email_found: boolean
@@ -48,6 +55,7 @@ export interface Lead {
   email: string | null
   city: string | null
   niche: string | null
+  segment: LeadSegment | null
   google_rating: number | null
   review_count: number | null
   status: LeadStatus

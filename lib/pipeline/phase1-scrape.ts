@@ -2,8 +2,13 @@ import { createServerSupabaseClient } from '@/lib/supabase'
 import { ApifyBusinessResult } from '@/types'
 
 function normalizeUrl(url: string): string {
-  if (!url.startsWith('http')) return `https://${url}`
-  return url
+  const withProtocol = url.startsWith('http') ? url : `https://${url}`
+  const parsed = new URL(withProtocol)
+  parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, '')
+  parsed.hash = ''
+  parsed.search = ''
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/'
+  return parsed.toString().replace(/\/$/, '')
 }
 
 function isValidUrl(url: string): boolean {
@@ -91,10 +96,36 @@ export async function runScrapePhase(
 
   console.log(`[Phase 1] Got ${businesses.length} businesses from Apify`)
 
+  let filtNoWebsite = 0
+  let filtClosed = 0
+  let filtRating = 0
+  let filtReviews = 0
+
+  const afterHardFilter = businesses.filter((b) => {
+    if (!b.website || !isValidUrl(b.website)) {
+      filtNoWebsite++
+      return false
+    }
+    if ((b as any).permanentlyClosed === true || (b as any).temporarilyClosed === true) {
+      filtClosed++
+      return false
+    }
+    if (b.totalScore !== null && b.totalScore !== undefined && (b.totalScore < 3.0 || b.totalScore > 4.5)) {
+      filtRating++
+      return false
+    }
+    if (b.reviewsCount !== null && b.reviewsCount !== undefined && (b.reviewsCount < 10 || b.reviewsCount > 200)) {
+      filtReviews++
+      return false
+    }
+    return true
+  })
+
+  console.log(`[Phase 1] Filtering: ${filtNoWebsite} no website, ${filtClosed} closed, ${filtRating} rating, ${filtReviews} reviews`)
+  console.log(`[Phase 1] After filtering: ${afterHardFilter.length} leads`)
+
   // Check existing domains to avoid duplicates
-  const urls = businesses
-    .filter((b) => b.website && isValidUrl(b.website))
-    .map((b) => normalizeUrl(b.website!))
+  const urls = afterHardFilter.map((b) => normalizeUrl(b.website!))
 
   const { data: existing } = await supabase
     .from('leads')
@@ -104,8 +135,7 @@ export async function runScrapePhase(
   const existingUrls = new Set((existing ?? []).map((e: { website_url: string }) => e.website_url))
 
   // Build inserts — skip businesses without a website or already in DB
-  const toInsert = businesses
-    .filter((b) => b.website && isValidUrl(b.website))
+  const toInsert = afterHardFilter
     .filter((b) => !existingUrls.has(normalizeUrl(b.website!)))
     .map((b) => ({
       company_name: b.title,
