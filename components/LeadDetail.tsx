@@ -411,6 +411,20 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     setLead(l => ({ ...l, email1_variant_type: type }))
   }
 
+  function deriveAutomaticPainpoint() {
+    const breakdown = lead.score_breakdown
+    if (breakdown?.has_cta === false) {
+      return { targetX: 0.58, targetY: 0.24, startX: 0.22, startY: 0.12, label: 'Geen duidelijke CTA' }
+    }
+    if (breakdown?.mobile_friendly === false) {
+      return { targetX: 0.78, targetY: 0.20, startX: 0.48, startY: 0.10, label: 'Mobiel onduidelijk' }
+    }
+    if (breakdown?.outdated_feel === true) {
+      return { targetX: 0.34, targetY: 0.22, startX: 0.66, startY: 0.10, label: 'Verouderde eerste indruk' }
+    }
+    return { targetX: 0.50, targetY: 0.26, startX: 0.18, startY: 0.12, label: 'Hier haken bezoekers af' }
+  }
+
   async function savePainpointScreenshot(image: string) {
     setSavingPainpoint(true)
     setPainpointMessage('')
@@ -438,13 +452,14 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     }
   }
 
-  async function handlePainpointClick(event: MouseEvent<HTMLImageElement>) {
-    if (!markingPainpoint || savingPainpoint || !lead.screenshot_url) return
-
-    const rect = event.currentTarget.getBoundingClientRect()
-    const xRatio = (event.clientX - rect.left) / rect.width
-    const yRatio = (event.clientY - rect.top) / rect.height
-
+  async function createMarkedPainpointScreenshot(opts: {
+    targetX: number
+    targetY: number
+    startX?: number
+    startY?: number
+    label?: string
+  }) {
+    if (savingPainpoint || !lead.screenshot_url) return
     try {
       const img = document.createElement('img')
       img.crossOrigin = 'anonymous'
@@ -464,12 +479,30 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
 
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
 
-      const targetX = Math.max(24, Math.min(canvas.width - 24, xRatio * canvas.width))
-      const targetY = Math.max(24, Math.min(canvas.height - 24, yRatio * canvas.height))
-      const startX = Math.max(30, Math.min(canvas.width - 30, targetX - 260))
-      const startY = Math.max(30, Math.min(canvas.height - 30, targetY - 150))
+      const targetX = Math.max(24, Math.min(canvas.width - 24, opts.targetX * canvas.width))
+      const targetY = Math.max(24, Math.min(canvas.height - 24, opts.targetY * canvas.height))
+      const startX = Math.max(30, Math.min(canvas.width - 30, (opts.startX ?? opts.targetX - 0.22) * canvas.width))
+      const startY = Math.max(30, Math.min(canvas.height - 30, (opts.startY ?? opts.targetY - 0.20) * canvas.height))
       const angle = Math.atan2(targetY - startY, targetX - startX)
       const headLength = 34
+
+      if (opts.label) {
+        ctx.save()
+        ctx.font = '700 28px Arial, sans-serif'
+        const labelWidth = Math.min(canvas.width - 36, ctx.measureText(opts.label).width + 32)
+        const labelX = Math.max(18, Math.min(canvas.width - labelWidth - 18, startX - 20))
+        const labelY = Math.max(18, startY - 64)
+        ctx.fillStyle = '#ff3b30'
+        ctx.shadowColor = 'rgba(0,0,0,0.35)'
+        ctx.shadowBlur = 10
+        ctx.beginPath()
+        ctx.roundRect(labelX, labelY, labelWidth, 48, 10)
+        ctx.fill()
+        ctx.shadowBlur = 0
+        ctx.fillStyle = '#fff'
+        ctx.fillText(opts.label, labelX + 16, labelY + 33)
+        ctx.restore()
+      }
 
       ctx.save()
       ctx.lineWidth = 10
@@ -501,6 +534,20 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     } catch (error) {
       setPainpointError(error instanceof Error ? error.message : 'Screenshot maken mislukt')
     }
+  }
+
+  async function handlePainpointClick(event: MouseEvent<HTMLImageElement>) {
+    if (!markingPainpoint || savingPainpoint || !lead.screenshot_url) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    await createMarkedPainpointScreenshot({
+      targetX: (event.clientX - rect.left) / rect.width,
+      targetY: (event.clientY - rect.top) / rect.height,
+    })
+  }
+
+  async function createAutomaticPainpointScreenshot() {
+    await createMarkedPainpointScreenshot(deriveAutomaticPainpoint())
   }
 
   async function stopSequence() {
@@ -966,22 +1013,32 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
             <div className="flex items-center justify-between gap-3 mb-3">
               <p className="text-white/40 text-xs uppercase tracking-wider">Originele website</p>
               {lead.screenshot_url && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMarkingPainpoint(v => !v)
-                    setPainpointMessage('')
-                    setPainpointError('')
-                  }}
-                  disabled={savingPainpoint}
-                  className={`px-2.5 py-1 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
-                    markingPainpoint
-                      ? 'border-red-400/40 bg-red-500/10 text-red-300'
-                      : 'border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20'
-                  }`}
-                >
-                  {savingPainpoint ? 'Opslaan...' : markingPainpoint ? 'Klik zwak punt' : 'Pijl plaatsen'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={createAutomaticPainpointScreenshot}
+                    disabled={savingPainpoint}
+                    className="px-2.5 py-1 rounded-lg text-xs border border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20 transition-colors disabled:opacity-40"
+                  >
+                    {savingPainpoint ? 'Opslaan...' : 'Auto pijl maken'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMarkingPainpoint(v => !v)
+                      setPainpointMessage('')
+                      setPainpointError('')
+                    }}
+                    disabled={savingPainpoint}
+                    className={`px-2.5 py-1 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
+                      markingPainpoint
+                        ? 'border-red-400/40 bg-red-500/10 text-red-300'
+                        : 'border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20'
+                    }`}
+                  >
+                    {savingPainpoint ? 'Opslaan...' : markingPainpoint ? 'Klik zwak punt' : 'Pijl plaatsen'}
+                  </button>
+                </div>
               )}
             </div>
             <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
