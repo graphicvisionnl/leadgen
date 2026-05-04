@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { Lead, LeadStatus, CrmStatus, ScoreBreakdown, EmailVariant, ReplyClassification } from '@/types'
 import { StatusBadge } from './StatusBadge'
@@ -237,6 +237,10 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [savingEmail, setSavingEmail] = useState(false)
   const [emailSaveMessage, setEmailSaveMessage] = useState('')
   const [emailSaveError, setEmailSaveError] = useState('')
+  const [markingPainpoint, setMarkingPainpoint] = useState(false)
+  const [savingPainpoint, setSavingPainpoint] = useState(false)
+  const [painpointMessage, setPainpointMessage] = useState('')
+  const [painpointError, setPainpointError] = useState('')
 
   const [emailFields, setEmailFields] = useState({
     email1_subject: lead.email1_subject ?? lead.email_subject ?? '',
@@ -405,6 +409,98 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
       body: JSON.stringify({ email1_variant_type: type }),
     }).catch(() => {})
     setLead(l => ({ ...l, email1_variant_type: type }))
+  }
+
+  async function savePainpointScreenshot(image: string) {
+    setSavingPainpoint(true)
+    setPainpointMessage('')
+    setPainpointError('')
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/painpoint-screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setPainpointError(data.error ?? 'Screenshot opslaan mislukt')
+        return
+      }
+      setLead(l => ({
+        ...l,
+        painpoint_screenshot_url: data.url,
+        email1_variant_type: 'painpoint_screenshot',
+      }))
+      setPainpointMessage('Screenshot opgeslagen en geselecteerd voor email 1.')
+      setMarkingPainpoint(false)
+    } finally {
+      setSavingPainpoint(false)
+    }
+  }
+
+  async function handlePainpointClick(event: MouseEvent<HTMLImageElement>) {
+    if (!markingPainpoint || savingPainpoint || !lead.screenshot_url) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const xRatio = (event.clientX - rect.left) / rect.width
+    const yRatio = (event.clientY - rect.top) / rect.height
+
+    try {
+      const img = document.createElement('img')
+      img.crossOrigin = 'anonymous'
+      img.src = lead.screenshot_url
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('Screenshot laden mislukt'))
+      })
+
+      const maxWidth = 1400
+      const scale = Math.min(1, maxWidth / img.naturalWidth)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.naturalWidth * scale)
+      canvas.height = Math.round(img.naturalHeight * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Canvas niet beschikbaar')
+
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+      const targetX = Math.max(24, Math.min(canvas.width - 24, xRatio * canvas.width))
+      const targetY = Math.max(24, Math.min(canvas.height - 24, yRatio * canvas.height))
+      const startX = Math.max(30, Math.min(canvas.width - 30, targetX - 260))
+      const startY = Math.max(30, Math.min(canvas.height - 30, targetY - 150))
+      const angle = Math.atan2(targetY - startY, targetX - startX)
+      const headLength = 34
+
+      ctx.save()
+      ctx.lineWidth = 10
+      ctx.strokeStyle = '#ff3b30'
+      ctx.fillStyle = '#ff3b30'
+      ctx.shadowColor = 'rgba(0,0,0,0.35)'
+      ctx.shadowBlur = 8
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(startX, startY)
+      ctx.lineTo(targetX, targetY)
+      ctx.stroke()
+
+      ctx.beginPath()
+      ctx.moveTo(targetX, targetY)
+      ctx.lineTo(targetX - headLength * Math.cos(angle - Math.PI / 6), targetY - headLength * Math.sin(angle - Math.PI / 6))
+      ctx.lineTo(targetX - headLength * Math.cos(angle + Math.PI / 6), targetY - headLength * Math.sin(angle + Math.PI / 6))
+      ctx.closePath()
+      ctx.fill()
+
+      ctx.lineWidth = 8
+      ctx.strokeStyle = '#ff3b30'
+      ctx.beginPath()
+      ctx.arc(targetX, targetY, 42, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+
+      await savePainpointScreenshot(canvas.toDataURL('image/jpeg', 0.86))
+    } catch (error) {
+      setPainpointError(error instanceof Error ? error.message : 'Screenshot maken mislukt')
+    }
   }
 
   async function stopSequence() {
@@ -867,15 +963,49 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
       <Collapsible title="Screenshots">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
-            <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Originele website</p>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <p className="text-white/40 text-xs uppercase tracking-wider">Originele website</p>
+              {lead.screenshot_url && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMarkingPainpoint(v => !v)
+                    setPainpointMessage('')
+                    setPainpointError('')
+                  }}
+                  disabled={savingPainpoint}
+                  className={`px-2.5 py-1 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
+                    markingPainpoint
+                      ? 'border-red-400/40 bg-red-500/10 text-red-300'
+                      : 'border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20'
+                  }`}
+                >
+                  {savingPainpoint ? 'Opslaan...' : markingPainpoint ? 'Klik zwak punt' : 'Pijl plaatsen'}
+                </button>
+              )}
+            </div>
             <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
               {lead.screenshot_url ? (
                 <Image src={lead.screenshot_url} alt="Screenshot originele site"
-                  width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
+                  width={640} height={360}
+                  onClick={handlePainpointClick}
+                  className={`w-full h-full object-cover object-top ${markingPainpoint ? 'cursor-crosshair' : ''}`}
+                  unoptimized />
               ) : (
                 <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
               )}
             </div>
+            {markingPainpoint && (
+              <p className="text-xs text-yellow-300/80 mt-2">Klik op het zwakke punt in de screenshot.</p>
+            )}
+            {painpointMessage && <p className="text-xs text-green-400 mt-2">{painpointMessage}</p>}
+            {painpointError && <p className="text-xs text-red-400 mt-2">{painpointError}</p>}
+            {lead.painpoint_screenshot_url && (
+              <div className="mt-3">
+                <p className="text-white/35 text-xs mb-2">Gemarkeerde screenshot</p>
+                <img src={lead.painpoint_screenshot_url} alt="Gemarkeerde website screenshot" className="max-w-[220px] rounded-lg border border-subtle" />
+              </div>
+            )}
           </div>
           <div>
             <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Gegenereerde preview</p>

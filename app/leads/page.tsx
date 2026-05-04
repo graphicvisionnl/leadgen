@@ -2,6 +2,7 @@
 
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { LeadsTable } from '@/components/LeadsTable'
 import { PaginationControls } from '@/components/PaginationControls'
 import { Lead } from '@/types'
@@ -101,6 +102,21 @@ function LeadsPageContent() {
           </button>
         ))}
       </div>
+
+      {filter === 'ready_to_send' && (
+        <div className="flex items-center justify-between gap-3 flex-wrap bg-surface border border-subtle rounded-lg px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white/75">Meerdere mails versturen</p>
+            <p className="text-xs text-white/35 mt-0.5">Selecteer leads of verstuur alle klaarstaande mails in batch.</p>
+          </div>
+          <Link
+            href="/email-ready"
+            className="px-3 py-1.5 rounded-lg text-sm bg-blue-500/15 border border-blue-500/30 text-blue-400 hover:bg-blue-500/25 transition-colors whitespace-nowrap"
+          >
+            Bulk versturen
+          </Link>
+        </div>
+      )}
 
       <LeadsTable
         leads={leads}
