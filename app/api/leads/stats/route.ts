@@ -8,7 +8,7 @@ export async function GET() {
   const supabase = createServerSupabaseClient()
 
   const [leadsRes, hotRes, followupRes, repliedRes] = await Promise.all([
-    supabase.from('leads').select('status,email,email1_subject,email1_body,email1_sent_at,created_at,updated_at'),
+    supabase.from('leads').select('status,email,email1_subject,email1_body,email1_sent_at,created_at,updated_at,crm_status,sequence_stopped'),
     supabase.from('leads').select('id', { count: 'exact', head: true }).eq('hot_lead', true).eq('crm_status', 'not_contacted'),
     supabase.from('leads').select('id', { count: 'exact', head: true })
       .lte('next_followup_at', new Date().toISOString())
@@ -30,7 +30,14 @@ export async function GET() {
     sent: leads.filter(l => l.status === 'sent').length,
     errors: leads.filter(l => l.status === 'error').length,
     fake_emails: leads.filter(l => l.status !== 'sent' && getFakeEmailReason(l.email)).length,
-    email_ready: leads.filter(l => l.status === 'qualified' && l.email && l.email1_subject && l.email1_body && !l.email1_sent_at).length,
+    email_ready: leads.filter(l =>
+      ['qualified', 'redesigned', 'deployed'].includes(l.status) &&
+      !!l.email?.trim() &&
+      !!l.email1_body?.trim() &&
+      !l.email1_sent_at &&
+      !['closed', 'rejected'].includes(l.crm_status ?? '') &&
+      l.sequence_stopped !== true
+    ).length,
     added_today: leads.filter(l => new Date(l.created_at) >= today).length,
     last_lead_at: lastLead?.created_at ?? null,
     last_activity_at: lastUpdated?.updated_at ?? null,

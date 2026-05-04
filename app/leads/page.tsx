@@ -7,13 +7,14 @@ import { PaginationControls } from '@/components/PaginationControls'
 import { Lead } from '@/types'
 
 const FILTER_TABS = [
-  { value: '',             label: 'Alle leads' },
-  { value: 'to_review',   label: 'Te beoordelen' },
+  { value: '',              label: 'All' },
+  { value: 'to_review',     label: 'Te beoordelen' },
+  { value: 'email_needed',  label: 'Email nodig' },
   { value: 'ready_to_send', label: 'Klaar om te sturen' },
-  { value: 'sent',        label: 'Verzonden' },
-  { value: 'replied',     label: 'Gereageerd' },
-  { value: 'closed',      label: 'Gesloten' },
-  { value: 'skipped',     label: 'Overgeslagen' },
+  { value: 'sent',          label: 'Verzonden' },
+  { value: 'replied',       label: 'Gereageerd' },
+  { value: 'closed',        label: 'Gesloten' },
+  { value: 'rejected',      label: 'Afgewezen' },
 ] as const
 
 function LeadsPageContent() {

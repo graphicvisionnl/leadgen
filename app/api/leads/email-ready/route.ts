@@ -13,11 +13,14 @@ export async function GET(request: NextRequest) {
   const { data, error, count } = await supabase
     .from('leads')
     .select('*', { count: 'exact' })
-    .eq('status', 'qualified')
+    .in('status', ['qualified', 'redesigned', 'deployed'])
     .not('email', 'is', null)
-    .not('email1_subject', 'is', null)
+    .neq('email', '')
     .not('email1_body', 'is', null)
+    .neq('email1_body', '')
     .is('email1_sent_at', null)
+    .or('crm_status.is.null,crm_status.eq.not_contacted,crm_status.eq.contacted,crm_status.eq.replied,crm_status.eq.interested')
+    .or('sequence_stopped.is.null,sequence_stopped.eq.false')
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 

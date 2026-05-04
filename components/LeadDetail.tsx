@@ -191,6 +191,8 @@ function validateScheduledLocal(value: string): { ok: true; iso: string } | { ok
 }
 
 function deriveNextAction(lead: Lead): { text: string; color: string } | null {
+  if (!lead.email?.trim() && ['qualified', 'redesigned', 'deployed'].includes(lead.status) && !['closed', 'rejected'].includes(lead.crm_status ?? '') && lead.sequence_stopped !== true)
+    return { text: 'Email toevoegen', color: 'text-yellow-400' }
   if (lead.reply_received_at && !lead.email2_draft_ready)
     return { text: 'Verwerk reply', color: 'text-green-400' }
   if (lead.reply_received_at && lead.email2_draft_ready)
@@ -232,6 +234,9 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now')
   const [scheduledAtLocal, setScheduledAtLocal] = useState(defaultScheduledTimeLocal())
   const [stoppingSequence, setStoppingSequence] = useState(false)
+  const [savingEmail, setSavingEmail] = useState(false)
+  const [emailSaveMessage, setEmailSaveMessage] = useState('')
+  const [emailSaveError, setEmailSaveError] = useState('')
 
   const [emailFields, setEmailFields] = useState({
     email1_subject: lead.email1_subject ?? lead.email_subject ?? '',
@@ -369,6 +374,30 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     }
   }
 
+  async function saveRecipientEmail() {
+    const nextEmail = emailTo.trim()
+    if (!nextEmail || nextEmail === lead.email) return
+    setSavingEmail(true)
+    setEmailSaveMessage('')
+    setEmailSaveError('')
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: nextEmail }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setEmailSaveError(data.error ?? 'Opslaan mislukt')
+        return
+      }
+      setLead(l => ({ ...l, email: nextEmail }))
+      setEmailSaveMessage(lead.email1_body ? 'E-mailadres opgeslagen. Lead staat nu klaar om te sturen.' : 'E-mailadres opgeslagen.')
+    } finally {
+      setSavingEmail(false)
+    }
+  }
+
   async function updateVariantType(type: 'text_only' | 'painpoint_screenshot') {
     await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH',
@@ -388,6 +417,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const sb: ScoreBreakdown | null = lead.score_breakdown ?? null
   const nextAction = deriveNextAction(lead)
   const activeCrm = CRM_OPTIONS.find(o => o.value === (lead.crm_status ?? 'not_contacted'))
+  const missingEmail = !lead.email?.trim()
 
   return (
     <div className="space-y-6">
@@ -499,6 +529,37 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
         </div>
 
         {sequenceError && <p className="text-red-400 text-xs">{sequenceError}</p>}
+
+        {missingEmail && (
+          <div className="rounded-lg border border-yellow-400/25 bg-yellow-400/10 p-3 space-y-3">
+            <p className="text-sm text-yellow-200">
+              Geen e-mailadres gevonden. Voeg handmatig een e-mailadres toe om te kunnen versturen.
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="email"
+                value={emailTo}
+                onChange={e => {
+                  setEmailTo(e.target.value)
+                  setEmailSaveMessage('')
+                  setEmailSaveError('')
+                }}
+                placeholder="naam@bedrijf.nl"
+                className="min-w-[240px] flex-1 bg-surface-2 border border-yellow-400/20 rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-yellow-400/50"
+              />
+              <button
+                type="button"
+                onClick={saveRecipientEmail}
+                disabled={savingEmail || !emailTo.trim()}
+                className="px-3 py-2 bg-yellow-400/15 border border-yellow-400/30 text-yellow-200 rounded-lg text-sm hover:bg-yellow-400/25 transition-colors disabled:opacity-40 whitespace-nowrap"
+              >
+                {savingEmail ? 'Opslaan…' : 'Email opslaan'}
+              </button>
+            </div>
+            {emailSaveMessage && <p className="text-xs text-green-400">{emailSaveMessage}</p>}
+            {emailSaveError && <p className="text-xs text-red-400">{emailSaveError}</p>}
+          </div>
+        )}
 
         {!emails[0].subject && !generatingSequence ? (
           <div className="py-8 text-center">
@@ -632,7 +693,11 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                         <input
                           type="email"
                           value={emailTo}
-                          onChange={e => setEmailTo(e.target.value)}
+                          onChange={e => {
+                            setEmailTo(e.target.value)
+                            setEmailSaveMessage('')
+                            setEmailSaveError('')
+                          }}
                           className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
                         />
                       </div>
@@ -663,6 +728,14 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                       )}
                       <div className="flex items-center gap-3 flex-wrap">
                         <button
+                          type="button"
+                          onClick={saveRecipientEmail}
+                          disabled={savingEmail || !emailTo.trim() || emailTo.trim() === lead.email}
+                          className="px-3 py-2 bg-surface-2 border border-subtle text-white/60 rounded-lg text-sm hover:text-white hover:border-white/20 transition-colors disabled:opacity-40"
+                        >
+                          {savingEmail ? 'Opslaan…' : 'Email opslaan'}
+                        </button>
+                        <button
                           onClick={() => {
                             if (sendMode === 'schedule') {
                               const parsed = validateScheduledLocal(scheduledAtLocal)
@@ -683,6 +756,8 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                         </button>
                         {sendError && <span className="text-red-400 text-sm">{sendError}</span>}
                         {sendSuccess && <span className="text-green-400 text-sm">{sendSuccess}</span>}
+                        {emailSaveMessage && <span className="text-green-400 text-sm">{emailSaveMessage}</span>}
+                        {emailSaveError && <span className="text-red-400 text-sm">{emailSaveError}</span>}
                       </div>
                     </div>
                   )}

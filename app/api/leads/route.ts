@@ -28,11 +28,23 @@ export async function GET(request: NextRequest) {
       case 'to_review':
         query = query.in('status', ['scraped', 'no_email', 'error'])
         break
+      case 'email_needed':
+        query = query
+          .in('status', ['qualified', 'redesigned', 'deployed'])
+          .or('email.is.null,email.eq.')
+          .or('crm_status.is.null,crm_status.eq.not_contacted,crm_status.eq.contacted,crm_status.eq.replied,crm_status.eq.interested')
+          .or('sequence_stopped.is.null,sequence_stopped.eq.false')
+        break
       case 'ready_to_send':
         query = query
-          .eq('status', 'qualified')
+          .in('status', ['qualified', 'redesigned', 'deployed'])
+          .not('email', 'is', null)
+          .neq('email', '')
           .not('email1_body', 'is', null)
+          .neq('email1_body', '')
           .is('email1_sent_at', null)
+          .or('crm_status.is.null,crm_status.eq.not_contacted,crm_status.eq.contacted,crm_status.eq.replied,crm_status.eq.interested')
+          .or('sequence_stopped.is.null,sequence_stopped.eq.false')
         break
       case 'sent':
         query = query.not('email1_sent_at', 'is', null)
@@ -41,9 +53,9 @@ export async function GET(request: NextRequest) {
         query = query.not('reply_received_at', 'is', null)
         break
       case 'closed':
-        query = query.in('crm_status', ['closed', 'interested'])
+        query = query.eq('crm_status', 'closed')
         break
-      case 'skipped':
+      case 'rejected':
         query = query.or('status.eq.disqualified,crm_status.eq.rejected')
         break
     }

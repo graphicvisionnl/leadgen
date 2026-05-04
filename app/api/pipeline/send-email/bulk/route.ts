@@ -35,11 +35,14 @@ async function getAllEmailReadyLeadIds(): Promise<string[]> {
   const { data, error } = await supabase
     .from('leads')
     .select('id')
-    .eq('status', 'qualified')
+    .in('status', ['qualified', 'redesigned', 'deployed'])
     .not('email', 'is', null)
-    .not('email1_subject', 'is', null)
+    .neq('email', '')
     .not('email1_body', 'is', null)
+    .neq('email1_body', '')
     .is('email1_sent_at', null)
+    .or('crm_status.is.null,crm_status.eq.not_contacted,crm_status.eq.contacted,crm_status.eq.replied,crm_status.eq.interested')
+    .or('sequence_stopped.is.null,sequence_stopped.eq.false')
     .order('created_at', { ascending: false })
     .limit(MAX_BATCH_SIZE)
 

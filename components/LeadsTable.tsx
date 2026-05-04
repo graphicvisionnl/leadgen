@@ -18,6 +18,7 @@ const NEXT_PHASE_LABEL: Record<string, string> = {
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'all',          label: 'Alles' },
   { value: 'scraped',      label: 'Gescraped' },
+  { value: 'email_needed', label: 'Email nodig' },
   { value: 'qualified',    label: 'Gekwalificeerd' },
   { value: 'disqualified', label: 'Afgewezen' },
   { value: 'deployed',     label: 'Deployed' },
@@ -51,6 +52,26 @@ function parseScheduleInput(value: string): { ok: true; iso: string } | { ok: fa
   const mins = date.getHours() * 60 + date.getMinutes()
   if (mins < 7 * 60 || mins >= 18 * 60) return { ok: false, error: 'Plan tussen 07:00 en 18:00' }
   return { ok: true, iso: date.toISOString() }
+}
+
+function hasEmail(lead: Lead): boolean {
+  return !!lead.email?.trim()
+}
+
+function isEmailNeeded(lead: Lead): boolean {
+  return ['qualified', 'redesigned', 'deployed'].includes(lead.status) &&
+    !hasEmail(lead) &&
+    !['closed', 'rejected'].includes(lead.crm_status ?? '') &&
+    lead.sequence_stopped !== true
+}
+
+function isReadyToSend(lead: Lead): boolean {
+  return ['qualified', 'redesigned', 'deployed'].includes(lead.status) &&
+    hasEmail(lead) &&
+    !!lead.email1_body?.trim() &&
+    !lead.email1_sent_at &&
+    !['closed', 'rejected'].includes(lead.crm_status ?? '') &&
+    lead.sequence_stopped !== true
 }
 
 interface LeadsTableProps {
@@ -206,7 +227,11 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                   </td>
                 </tr>
               ) : (
-                leads.map((lead) => (
+                leads.map((lead) => {
+                  const emailNeeded = isEmailNeeded(lead)
+                  const readyToSend = isReadyToSend(lead)
+
+                  return (
                   <tr
                     key={lead.id}
                     className="border-b border-subtle last:border-0 hover:bg-white/[0.03] transition-colors"
@@ -248,7 +273,7 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                       )}
                     </td>
                     <td className="px-4 py-3 text-white/60 max-w-[160px] truncate">
-                      {lead.email ? (
+                      {hasEmail(lead) ? (
                         <div className="space-y-1">
                           <span>{lead.email}</span>
                           {getFakeEmailReason(lead.email) && (
@@ -311,8 +336,19 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col items-start gap-2">
-                        {/* Qualified + draft ready + not yet sent → Send button */}
-                        {lead.status === 'qualified' && lead.email1_subject && !lead.email1_sent_at && (
+                        {emailNeeded && (
+                          <>
+                            <span className="text-xs font-medium text-yellow-400 whitespace-nowrap">Email toevoegen</span>
+                            <Link
+                              href={`/leads/${lead.id}`}
+                              className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/60 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors whitespace-nowrap"
+                            >
+                              Open lead
+                            </Link>
+                          </>
+                        )}
+                        {/* Draft ready + not yet sent → Send button */}
+                        {!emailNeeded && readyToSend && lead.email1_subject && (
                           <>
                             <div className="flex items-center gap-2">
                               <button
@@ -379,7 +415,7 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                           </>
                         )}
                         {/* Other phases advance button */}
-                        {NEXT_PHASE_LABEL[lead.status] && (
+                        {!emailNeeded && NEXT_PHASE_LABEL[lead.status] && (
                           <button
                             onClick={() => advanceLead(lead)}
                             disabled={advancing !== null}
@@ -393,7 +429,8 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                       </div>
                     </td>
                   </tr>
-                ))
+                  )
+                })
               )}
             </tbody>
           </table>
