@@ -1113,50 +1113,91 @@ async function phase4(runId: string) {
 
 // ─── Pipeline helpers (used by auto /run) ────────────────────────────────────
 
-function derivePainpointMarker(lead: any): { targetX: number; targetY: number; startX: number; startY: number; label: string } {
-  const breakdown: Partial<ScoreBreakdown> = lead.score_breakdown ?? {}
-
-  if (breakdown.has_cta === false) {
-    return { targetX: 0.58, targetY: 0.24, startX: 0.22, startY: 0.12, label: 'Geen duidelijke CTA' }
-  }
-  if (breakdown.mobile_friendly === false) {
-    return { targetX: 0.78, targetY: 0.20, startX: 0.48, startY: 0.10, label: 'Mobiel onduidelijk' }
-  }
-  if (breakdown.outdated_feel === true) {
-    return { targetX: 0.34, targetY: 0.22, startX: 0.66, startY: 0.10, label: 'Verouderde eerste indruk' }
-  }
-  return { targetX: 0.50, targetY: 0.26, startX: 0.18, startY: 0.12, label: 'Hier haken bezoekers af' }
+type PainpointMarker = {
+  targetX: number
+  targetY: number
+  startX: number
+  startY: number
+  label: string
+  reason: string
 }
 
-async function fetchExistingScreenshotBuffer(url: string | null | undefined): Promise<Buffer | null> {
-  if (!url) return null
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) })
-    if (!res.ok) return null
-    return Buffer.from(await res.arrayBuffer())
-  } catch {
+async function detectVisiblePainpoint(page: any): Promise<PainpointMarker | null> {
+  return await page.evaluate(() => {
+    const viewportWidth = window.innerWidth || 1365
+    const viewportHeight = window.innerHeight || 768
+    const topFold = viewportHeight * 0.82
+    const visible = (el: Element) => {
+      const style = window.getComputedStyle(el)
+      const rect = el.getBoundingClientRect()
+      return style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        Number(style.opacity || '1') > 0.05 &&
+        rect.width >= 80 &&
+        rect.height >= 28 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < topFold &&
+        rect.left < viewportWidth
+    }
+    const normalize = (rect: DOMRect, label: string, reason: string) => {
+      const targetX = Math.max(0.08, Math.min(0.92, (rect.left + rect.width / 2) / viewportWidth))
+      const targetY = Math.max(0.10, Math.min(0.84, (rect.top + rect.height / 2) / viewportHeight))
+      const startX = targetX > 0.55 ? 0.20 : 0.72
+      const startY = Math.max(0.08, targetY - 0.18)
+      return { targetX, targetY, startX, startY, label, reason }
+    }
+
+    const elements = Array.from(document.querySelectorAll('body *')).filter(visible)
+    const cookieWords = /(cookie|cookies|privacy|accepteer|accepteren|accept|toestaan|akkoord|consent)/i
+    const cookieCandidates = elements
+      .map((el) => ({ el, text: (el.textContent || '').replace(/\s+/g, ' ').trim(), rect: el.getBoundingClientRect() }))
+      .filter(({ text, rect }) => cookieWords.test(text) && text.length >= 12 && rect.width >= 220 && rect.height >= 55)
+      .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height))
+    if (cookieCandidates[0]) {
+      return normalize(cookieCandidates[0].rect, 'Cookie popup blokkeert de eerste indruk', 'cookie')
+    }
+
+    const ctaWords = /(contact|bel|offerte|afspraak|boek|reserveer|bestel|winkel|aanvragen|quote|gratis|plan|maak direct)/i
+    const ctaCandidates = elements
+      .map((el) => ({ el, text: (el.textContent || '').replace(/\s+/g, ' ').trim(), rect: el.getBoundingClientRect(), tag: el.tagName.toLowerCase() }))
+      .filter(({ text, rect, tag }) => ctaWords.test(text) && text.length <= 80 && rect.width >= 70 && rect.height >= 24 && (tag === 'a' || tag === 'button' || rect.height <= 90))
+      .sort((a, b) => a.rect.top - b.rect.top)
+
+    const lowCta = ctaCandidates.find(({ rect }) => rect.top > viewportHeight * 0.48)
+    if (lowCta) {
+      return normalize(lowCta.rect, 'Belangrijkste actie valt te laag weg', 'low_cta')
+    }
+
+    const topCta = ctaCandidates[0]
+    if (topCta && topCta.rect.width < 140 && topCta.rect.height < 44) {
+      return normalize(topCta.rect, 'CTA valt nauwelijks op', 'weak_cta')
+    }
+
     return null
-  }
+  })
 }
 
-async function captureWebsiteScreenshotBuffer(browser: any, url: string | null | undefined): Promise<Buffer | null> {
+async function captureWebsitePainpoint(browser: any, url: string | null | undefined): Promise<{ buffer: Buffer; marker: PainpointMarker } | null> {
   if (!url) return null
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 1365, height: 768, deviceScaleFactor: 1 })
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 25_000 })
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    const marker = await detectVisiblePainpoint(page)
+    if (!marker) return null
     const shot = await page.screenshot({ type: 'jpeg', quality: 76, fullPage: false })
-    return Buffer.from(shot)
+    return { buffer: Buffer.from(shot), marker }
   } catch (e) {
-    log('Painpoint', `Live screenshot mislukt voor ${url}: ${e}`)
+    log('Painpoint', `Live painpoint detectie mislukt voor ${url}: ${e}`)
     return null
   } finally {
     await page.close().catch(() => {})
   }
 }
 
-async function annotatePainpointScreenshot(browser: any, imageBuffer: Buffer, lead: any): Promise<Buffer> {
-  const marker = derivePainpointMarker(lead)
+async function annotatePainpointScreenshot(browser: any, imageBuffer: Buffer, marker: PainpointMarker): Promise<Buffer> {
   const page = await browser.newPage()
   const imageDataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`
   const width = 900
@@ -1200,16 +1241,14 @@ async function ensurePainpointScreenshotForLead(lead: any): Promise<string | nul
 
   const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   try {
-    const sourceBuffer =
-      await fetchExistingScreenshotBuffer(lead.screenshot_url) ??
-      await captureWebsiteScreenshotBuffer(browser, lead.website_url)
+    const livePainpoint = await captureWebsitePainpoint(browser, lead.website_url)
 
-    if (!sourceBuffer) {
-      log('Painpoint', `Geen bron-screenshot voor ${lead.company_name}`)
+    if (!livePainpoint) {
+      log('Painpoint', `Geen betrouwbaar zichtbaar painpoint voor ${lead.company_name}`)
       return null
     }
 
-    const annotated = await annotatePainpointScreenshot(browser, sourceBuffer, lead)
+    const annotated = await annotatePainpointScreenshot(browser, livePainpoint.buffer, livePainpoint.marker)
     const filename = `${lead.id}-painpoint-auto.jpg`
     const { error } = await supabase.storage
       .from('screenshots')
@@ -1222,7 +1261,7 @@ async function ensurePainpointScreenshotForLead(lead: any): Promise<string | nul
       painpoint_screenshot_url: url,
       updated_at: new Date().toISOString(),
     }).eq('id', lead.id)
-    log('Painpoint', `Automatische screenshot gemaakt voor ${lead.company_name}`)
+    log('Painpoint', `Automatische screenshot gemaakt voor ${lead.company_name} (${livePainpoint.marker.reason})`)
     return url
   } catch (e) {
     log('Painpoint', `Automatische screenshot mislukt voor ${lead.company_name}: ${e}`)
@@ -1290,11 +1329,15 @@ Geef ALLEEN dit JSON terug, niets anders:
   const emails = JSON.parse(jsonMatch[0])
   emails.email1 = { subject: email1.subject, body: email1.body }
 
-  // Randomly assign variant type 50/50 if not already set
-  const variantType: string = lead.email1_variant_type ?? (Math.random() < 0.5 ? 'text_only' : 'painpoint_screenshot')
+  // Randomly assign variant type 50/50 if not already set.
+  // Screenshot variant is only used when we can point at a concrete visible issue.
+  let variantType: string = lead.email1_variant_type ?? (Math.random() < 0.5 ? 'text_only' : 'painpoint_screenshot')
   const painpointScreenshotUrl = variantType === 'painpoint_screenshot'
     ? await ensurePainpointScreenshotForLead(lead)
     : lead.painpoint_screenshot_url
+  if (variantType === 'painpoint_screenshot' && !painpointScreenshotUrl) {
+    variantType = 'text_only'
+  }
 
   const updatePayload: Record<string, any> = {
     email1_subject: emails.email1.subject, email1_body: emails.email1.body,

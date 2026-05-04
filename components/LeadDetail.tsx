@@ -411,20 +411,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     setLead(l => ({ ...l, email1_variant_type: type }))
   }
 
-  function deriveAutomaticPainpoint() {
-    const breakdown = lead.score_breakdown
-    if (breakdown?.has_cta === false) {
-      return { targetX: 0.58, targetY: 0.24, startX: 0.22, startY: 0.12, label: 'Geen duidelijke CTA' }
-    }
-    if (breakdown?.mobile_friendly === false) {
-      return { targetX: 0.78, targetY: 0.20, startX: 0.48, startY: 0.10, label: 'Mobiel onduidelijk' }
-    }
-    if (breakdown?.outdated_feel === true) {
-      return { targetX: 0.34, targetY: 0.22, startX: 0.66, startY: 0.10, label: 'Verouderde eerste indruk' }
-    }
-    return { targetX: 0.50, targetY: 0.26, startX: 0.18, startY: 0.12, label: 'Hier haken bezoekers af' }
-  }
-
   async function savePainpointScreenshot(image: string) {
     setSavingPainpoint(true)
     setPainpointMessage('')
@@ -547,11 +533,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   }
 
   async function createAutomaticPainpointScreenshot() {
-    if (lead.screenshot_url) {
-      await createMarkedPainpointScreenshot(deriveAutomaticPainpoint())
-      return
-    }
-
     if (!lead.website_url) {
       setPainpointError('Geen website beschikbaar om een screenshot te maken')
       return
