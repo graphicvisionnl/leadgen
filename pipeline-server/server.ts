@@ -1152,8 +1152,15 @@ async function detectVisiblePainpoint(page: any): Promise<PainpointMarker | null
     const cookieWords = /(cookie|cookies|privacy|accepteer|accepteren|accept|toestaan|akkoord|consent)/i
     const cookieCandidates = elements
       .map((el) => ({ el, text: (el.textContent || '').replace(/\s+/g, ' ').trim(), rect: el.getBoundingClientRect() }))
-      .filter(({ text, rect }) => cookieWords.test(text) && text.length >= 12 && rect.width >= 220 && rect.height >= 55)
-      .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height))
+      .filter(({ text, rect }) =>
+        cookieWords.test(text) &&
+        text.length >= 12 &&
+        text.length <= 900 &&
+        rect.width >= 220 &&
+        rect.height >= 55 &&
+        rect.width * rect.height <= viewportWidth * viewportHeight * 0.45
+      )
+      .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height))
     if (cookieCandidates[0]) {
       return normalize(cookieCandidates[0].rect, 'Cookie popup blokkeert de eerste indruk', 'cookie')
     }
