@@ -312,6 +312,29 @@ function normalizeEmailNumber(raw: unknown): EmailNumber | null {
   return num === 1 || num === 2 || num === 3 || num === 4 ? num : null
 }
 
+function getFakeEmailReason(email: string | null | undefined): string | null {
+  if (!email) return null
+  const normalized = email.trim().toLowerCase()
+  const match = normalized.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/)
+  if (!match) return 'Ongeldig e-mailadres'
+
+  const local = match[1].replace(/\+.*$/, '')
+  const domain = match[2].replace(/^www\./, '')
+  const fakeDomains = new Set(['example.com', 'example.nl', 'test.com', 'test.nl', 'fake.com', 'dummy.com'])
+  const fakeLocals = new Set([
+    'test', 'tester', 'testing', 'joedoe', 'joe.doe', 'johndoe', 'john.doe',
+    'janedoe', 'jane.doe', 'dummy', 'fake', 'demo', 'example', 'mail', 'email',
+    'name', 'naam', 'voornaam', 'achternaam', 'firstname', 'lastname',
+  ])
+
+  if (fakeDomains.has(domain)) return `Fake/test domein: ${domain}`
+  if (fakeLocals.has(local)) return `Fake/test mailbox: ${local}`
+  if (/^(test|fake|dummy|demo)[._-]?\d*$/i.test(local)) return `Fake/test mailbox: ${local}`
+  if (/^(joe|john|jane)[._-]?doe\d*$/i.test(local)) return `Placeholder mailbox: ${local}`
+  if (local.includes('whatever')) return `Placeholder mailbox: ${local}`
+  return null
+}
+
 function normalizeLeadSegment(raw: unknown): LeadSegment {
   return raw === 'no_website' ||
     raw === 'low_reviews' ||
@@ -504,63 +527,81 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
   const businesses: any[] = await resultsRes.json()
   log('Phase 1', `${businesses.length} bedrijven ontvangen van Apify`)
 
-  // ─── Hard filter before DB insert ────────────────────────────────────────────
-  let filtNoWebsite = 0, filtClosed = 0, filtRating = 0, filtReviews = 0
+  // ─── Hard skip: only junk we truly never want ────────────────────────────────
+  let skippedClosed = 0, skippedJunk = 0
 
-  const afterHardFilter = businesses.filter((b: any) => {
-    if (!b.website || !isValidUrl(b.website)) {
-      filtNoWebsite++; return false
-    }
-    if (b.permanentlyClosed === true || b.temporarilyClosed === true) {
-      filtClosed++; return false
-    }
-    // Rating filter: only 3.0–4.5 (skip no-rating leads? No — allow missing rating)
-    if (b.totalScore !== null && b.totalScore !== undefined) {
-      if (b.totalScore < 3.0 || b.totalScore > 4.5) {
-        filtRating++; return false
-      }
-    }
-    // Review count filter: 10–200 (too few = not established; too many = over-optimized)
-    if (b.reviewsCount !== null && b.reviewsCount !== undefined) {
-      if (b.reviewsCount < 10 || b.reviewsCount > 200) {
-        filtReviews++; return false
-      }
-    }
+  const afterJunkFilter = businesses.filter((b: any) => {
+    if (!b.title) { skippedJunk++; return false }
+    if (b.permanentlyClosed === true || b.temporarilyClosed === true) { skippedClosed++; return false }
     return true
   })
 
-  const totalFiltered = filtNoWebsite + filtClosed + filtRating + filtReviews
-  if (filtNoWebsite)  log('Phase 1', `Gefilterd: ${filtNoWebsite} zonder website`)
-  if (filtClosed)     log('Phase 1', `Gefilterd: ${filtClosed} gesloten bedrijven`)
-  if (filtRating)     log('Phase 1', `Gefilterd: ${filtRating} rating buiten 3.0–4.5`)
-  if (filtReviews)    log('Phase 1', `Gefilterd: ${filtReviews} reviews buiten 10–200`)
-  log('Phase 1', `Na filtering: ${afterHardFilter.length} leads (${totalFiltered} gefilterd)`)
+  if (skippedClosed) log('Phase 1', `Overgeslagen: ${skippedClosed} gesloten bedrijven`)
+  if (skippedJunk)   log('Phase 1', `Overgeslagen: ${skippedJunk} zonder naam (junk)`)
 
-  // ─── Dedup against existing leads ────────────────────────────────────────────
-  const urls = afterHardFilter.map((b: any) => normalizeUrl(b.website))
-  const { data: existing } = await supabase.from('leads').select('website_url').in('website_url', urls)
-  const existingUrls = new Set((existing ?? []).map((e: any) => e.website_url))
-  const filtExisting = afterHardFilter.filter((b: any) => existingUrls.has(normalizeUrl(b.website))).length
-  if (filtExisting) log('Phase 1', `Gefilterd: ${filtExisting} al bekende leads (dedup)`)
+  // ─── Segment assignment ───────────────────────────────────────────────────────
+  // Every lead gets a segment instead of being filtered out
+  let segNoWebsite = 0, segLowReviews = 0, segIdeal = 0, segHighReviews = 0, segHighRating = 0
 
-  const toInsert = afterHardFilter
-    .filter((b: any) => !existingUrls.has(normalizeUrl(b.website)))
-    .map((b: any) => ({
-      company_name: b.title,
-      website_url: normalizeUrl(b.website),
-      email: b.email ?? null,
-      city: b.city ?? city,
-      niche,
-      google_rating: b.totalScore ?? null,
-      review_count: b.reviewsCount ?? null,
-      status: b.email ? 'scraped' : 'no_email',
-      pipeline_run_id: runId,
-    }))
+  function assignSegment(b: any): LeadSegment {
+    if (!b.website || !isValidUrl(b.website)) { segNoWebsite++;  return 'no_website' }
+    const rating: number | null = b.totalScore ?? null
+    const reviews: number | null = b.reviewsCount ?? null
+    if (rating !== null && rating > 4.6)   { segHighRating++;  return 'high_rating' }
+    if (reviews !== null && reviews > 150) { segHighReviews++; return 'high_reviews' }
+    if (reviews !== null && reviews < 10)  { segLowReviews++;  return 'low_reviews' }
+    segIdeal++; return 'ideal'
+  }
+
+  // Assign segment upfront so we can use it during insert
+  const withSegments = afterJunkFilter.map((b: any) => ({ ...b, _segment: assignSegment(b) }))
+
+  log('Phase 1', `Segmenten: ${segIdeal} ideal · ${segNoWebsite} no_website · ${segLowReviews} low_reviews · ${segHighReviews} high_reviews · ${segHighRating} high_rating`)
+
+  // ─── Batch-level dedup (same business from multiple search terms) ─────────────
+  const seenInBatch = new Set<string>()
+  const batchDeduped = withSegments.filter((b: any) => {
+    const key = b.website && isValidUrl(b.website)
+      ? normalizeUrl(b.website)
+      : `${(b.title ?? '').toLowerCase().trim()}|${(b.city ?? city).toLowerCase().trim()}`
+    if (seenInBatch.has(key)) return false
+    seenInBatch.add(key)
+    return true
+  })
+  const batchDupes = withSegments.length - batchDeduped.length
+  if (batchDupes) log('Phase 1', `Batch dedup: ${batchDupes} duplicaten verwijderd`)
+
+  // ─── DB dedup ─────────────────────────────────────────────────────────────────
+  const websiteLeads   = batchDeduped.filter((b: any) => b.website && isValidUrl(b.website))
+  const noWebsiteLeads = batchDeduped.filter((b: any) => !b.website || !isValidUrl(b.website))
+
+  const urls = websiteLeads.map((b: any) => normalizeUrl(b.website))
+  const { data: existingByUrl } = await supabase.from('leads').select('website_url').in('website_url', urls)
+  const existingUrls = new Set((existingByUrl ?? []).map((e: any) => e.website_url))
+  const dbDupWebsite = websiteLeads.filter((b: any) => existingUrls.has(normalizeUrl(b.website))).length
+  if (dbDupWebsite) log('Phase 1', `DB dedup: ${dbDupWebsite} website-leads al bekend`)
+
+  const newWebsiteLeads   = websiteLeads.filter((b: any) => !existingUrls.has(normalizeUrl(b.website)))
+  // No-website leads: skip DB dedup (low volume, deduped within batch above)
+
+  // ─── Build insert payload ─────────────────────────────────────────────────────
+  const toInsert = [...newWebsiteLeads, ...noWebsiteLeads].map((b: any) => ({
+    company_name:    b.title,
+    website_url:     b.website && isValidUrl(b.website) ? normalizeUrl(b.website) : null,
+    email:           b.email ?? null,
+    city:            b.city ?? city,
+    niche,
+    segment:         b._segment as LeadSegment,
+    google_rating:   b.totalScore ?? null,
+    review_count:    b.reviewsCount ?? null,
+    status:          'scraped' as const,
+    pipeline_run_id: runId,
+  }))
 
   if (!toInsert.length) { log('Phase 1', 'Geen nieuwe leads om in te voegen'); return 0 }
   const { data: inserted, error } = await supabase.from('leads').insert(toInsert).select('id')
   if (error) throw error
-  log('Phase 1', `${inserted?.length} leads ingevoegd — ${businesses.length} raw → ${totalFiltered + filtExisting} gefilterd → ${inserted?.length} nieuw`)
+  log('Phase 1', `${inserted?.length} leads ingevoegd — ${businesses.length} raw → ${skippedClosed + skippedJunk + batchDupes + dbDupWebsite} overgeslagen → ${inserted?.length} nieuw`)
   await supabase.from('pipeline_runs').update({ scraped_count: inserted?.length ?? 0 }).eq('id', runId)
   return inserted?.length ?? 0
 }
@@ -674,6 +715,18 @@ async function phase2SingleLead(lead: any): Promise<boolean> {
   const email = lead.email ?? signals.email
   if (signals.email && !lead.email) {
     await supabase.from('leads').update({ email: signals.email }).eq('id', lead.id)
+  }
+
+  const fakeEmailReason = getFakeEmailReason(email)
+  if (fakeEmailReason) {
+    log('Phase 2', `${lead.company_name} — fake e-mail gedetecteerd: ${fakeEmailReason}`)
+    await supabase.from('leads').update({
+      email,
+      status: 'error',
+      qualify_reason: `Fake e-mail gedetecteerd: ${fakeEmailReason}`,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    return false
   }
 
   const prompt = `Je bent een webdesign bureau dat beoordeelt of een bedrijf baat zou hebben bij een nieuwe website.
