@@ -23,10 +23,10 @@ export default async function LeadPage({ params }: Props) {
   return (
     <div>
       <Link
-        href="/"
+        href="/leads"
         className="inline-flex items-center gap-1.5 text-white/40 hover:text-white text-sm mb-6 transition-colors"
       >
-        ← Terug naar dashboard
+        ← Terug naar leads
       </Link>
       <LeadDetail lead={lead as Lead} />
     </div>

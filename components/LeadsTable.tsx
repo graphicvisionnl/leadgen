@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { nl } from 'date-fns/locale'
 import { Lead, LeadStatus } from '@/types'
+import { getFakeEmailReason } from '@/lib/email-quality'
 import { StatusBadge } from './StatusBadge'
 
 const NEXT_PHASE_LABEL: Record<string, string> = {
@@ -21,7 +22,36 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'disqualified', label: 'Afgewezen' },
   { value: 'deployed',     label: 'Deployed' },
   { value: 'sent',         label: 'Verzonden' },
+  { value: 'error',        label: 'Errors' },
 ]
+
+function toDateTimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function defaultScheduleInput(): string {
+  const now = new Date()
+  const target = new Date(now.getTime() + 30 * 60 * 1000)
+  target.setSeconds(0, 0)
+  target.setMinutes(target.getMinutes() <= 30 ? 30 : 60, 0, 0)
+  if (target.getHours() < 7) target.setHours(7, 0, 0, 0)
+  if (target.getHours() >= 18) {
+    target.setDate(target.getDate() + 1)
+    target.setHours(7, 0, 0, 0)
+  }
+  return toDateTimeLocalValue(target)
+}
+
+function parseScheduleInput(value: string): { ok: true; iso: string } | { ok: false; error: string } {
+  if (!value) return { ok: false, error: 'Kies datum/tijd' }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return { ok: false, error: 'Ongeldige datum/tijd' }
+  if (date.getTime() <= Date.now()) return { ok: false, error: 'Kies een tijd in de toekomst' }
+  const mins = date.getHours() * 60 + date.getMinutes()
+  if (mins < 7 * 60 || mins >= 18 * 60) return { ok: false, error: 'Plan tussen 07:00 en 18:00' }
+  return { ok: true, iso: date.toISOString() }
+}
 
 interface LeadsTableProps {
   leads: Lead[]
@@ -29,23 +59,54 @@ interface LeadsTableProps {
   onFilterChange: (status: string) => void
   isLoading: boolean
   onRefresh: () => void
+  hideFilterBar?: boolean
+  showSegment?: boolean
 }
 
-export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onRefresh }: LeadsTableProps) {
+const SEGMENT_LABELS: Record<string, string> = {
+  ideal:        'Ideaal',
+  no_website:   'Geen website',
+  low_reviews:  'Weinig reviews',
+  high_reviews: 'Veel reviews',
+  high_rating:  'Hoge score',
+}
+
+const SEGMENT_COLORS: Record<string, string> = {
+  ideal:        'bg-green-500/10 text-green-400',
+  no_website:   'bg-orange-500/10 text-orange-400',
+  low_reviews:  'bg-yellow-500/10 text-yellow-400',
+  high_reviews: 'bg-blue-500/10 text-blue-400',
+  high_rating:  'bg-purple-500/10 text-purple-400',
+}
+
+export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onRefresh, hideFilterBar, showSegment }: LeadsTableProps) {
   const [deletingAll, setDeletingAll] = useState(false)
   const [advancing, setAdvancing] = useState<string | null>(null)
   const [sending, setSending] = useState<string | null>(null)
+  const [scheduleLeadId, setScheduleLeadId] = useState<string | null>(null)
+  const [scheduledAtLocal, setScheduledAtLocal] = useState(defaultScheduleInput())
+  const [scheduleError, setScheduleError] = useState('')
 
-  async function sendEmail1(lead: Lead) {
-    if (!confirm(`Email 1 versturen naar ${lead.company_name}?`)) return
+  async function sendEmail1(lead: Lead, scheduledFor?: string) {
+    if (!scheduledFor && !confirm(`Email 1 versturen naar ${lead.company_name}?`)) return
     setSending(lead.id)
     try {
       const pipelineUrl = '/api/pipeline/send-email'
-      await fetch(pipelineUrl, {
+      const res = await fetch(pipelineUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, emailNumber: 1 }),
+        body: JSON.stringify({ leadId: lead.id, emailNumber: 1, scheduledFor }),
       })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert(data.error ?? 'Versturen mislukt')
+        return
+      }
+      if (data.scheduled) {
+        setScheduleLeadId(null)
+        setScheduleError('')
+        alert(`Email ingepland voor ${new Date(data.scheduled_for).toLocaleString('nl-NL')}`)
+      }
       onRefresh()
     } finally {
       setSending(null)
@@ -88,32 +149,34 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
 
   return (
     <div>
-      {/* Filter tabs */}
-      <div className="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
-        {STATUS_FILTERS.map((f) => (
+      {/* Filter tabs — hidden when parent manages filters */}
+      {!hideFilterBar && (
+        <div className="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => onFilterChange(f.value)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                statusFilter === f.value
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/45 hover:text-white/70'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
           <button
-            key={f.value}
-            onClick={() => onFilterChange(f.value)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-              statusFilter === f.value
-                ? 'bg-white/10 text-white'
-                : 'text-white/45 hover:text-white/70'
-            }`}
+            onClick={deleteAllDisqualified}
+            disabled={deletingAll}
+            className="ml-auto px-3 py-1.5 rounded-lg text-xs whitespace-nowrap text-red-400/70 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
           >
-            {f.label}
+            {deletingAll ? 'Verwijderen…' : 'Verwijder afgewezen'}
           </button>
-        ))}
-        <button
-          onClick={deleteAllDisqualified}
-          disabled={deletingAll}
-          className="ml-auto px-3 py-1.5 rounded-lg text-xs whitespace-nowrap text-red-400/70 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-        >
-          {deletingAll ? 'Verwijderen…' : 'Verwijder afgewezen'}
-        </button>
-      </div>
+        </div>
+      )}
 
       {/* Table */}
-      <div className="bg-surface rounded-xl border border-subtle overflow-hidden">
+      <div className="bg-surface rounded-lg border border-subtle overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -123,6 +186,7 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                 <th className="text-left text-white/40 font-medium px-4 py-3">E-mail</th>
                 <th className="text-left text-white/40 font-medium px-4 py-3">Rating</th>
                 <th className="text-left text-white/40 font-medium px-4 py-3">Status</th>
+                {showSegment && <th className="text-left text-white/40 font-medium px-4 py-3">Segment</th>}
                 <th className="text-left text-white/40 font-medium px-4 py-3">Preview</th>
                 <th className="text-left text-white/40 font-medium px-4 py-3">Toegevoegd</th>
                 <th className="px-4 py-3"></th>
@@ -131,13 +195,13 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-white/30">
+                  <td colSpan={showSegment ? 9 : 8} className="text-center py-12 text-white/30">
                     Laden…
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-white/30">
+                  <td colSpan={showSegment ? 9 : 8} className="text-center py-12 text-white/30">
                     Geen leads gevonden
                   </td>
                 </tr>
@@ -184,7 +248,14 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                       )}
                     </td>
                     <td className="px-4 py-3 text-white/60 max-w-[160px] truncate">
-                      {lead.email ?? (
+                      {lead.email ? (
+                        <div className="space-y-1">
+                          <span>{lead.email}</span>
+                          {getFakeEmailReason(lead.email) && (
+                            <span className="block text-[11px] text-red-300">fake/test</span>
+                          )}
+                        </div>
+                      ) : (
                         <span className="text-white/25 italic">geen</span>
                       )}
                     </td>
@@ -207,6 +278,17 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                         </p>
                       )}
                     </td>
+                    {showSegment && (
+                      <td className="px-4 py-3">
+                        {lead.segment ? (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SEGMENT_COLORS[lead.segment] ?? 'bg-white/10 text-white/50'}`}>
+                            {SEGMENT_LABELS[lead.segment] ?? lead.segment}
+                          </span>
+                        ) : (
+                          <span className="text-white/25">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       {lead.preview_url ? (
                         <a
@@ -228,18 +310,73 @@ export function LeadsTable({ leads, statusFilter, onFilterChange, isLoading, onR
                       })}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col items-start gap-2">
                         {/* Qualified + draft ready + not yet sent → Send button */}
                         {lead.status === 'qualified' && lead.email1_subject && !lead.email1_sent_at && (
-                          <button
-                            onClick={() => sendEmail1(lead)}
-                            disabled={sending === lead.id}
-                            className="px-2.5 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-lg text-xs hover:bg-blue-500/25 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
-                          >
-                            {sending === lead.id
-                              ? <><span className="w-2.5 h-2.5 border border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />Verzenden…</>
-                              : '↑ Verstuur Email 1'}
-                          </button>
+                          <>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => sendEmail1(lead)}
+                                disabled={sending === lead.id}
+                                className="px-2.5 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-lg text-xs hover:bg-blue-500/25 transition-colors disabled:opacity-40 whitespace-nowrap flex items-center gap-1"
+                              >
+                                {sending === lead.id
+                                  ? <><span className="w-2.5 h-2.5 border border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />Verzenden…</>
+                                  : '↑ Verstuur nu'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setScheduleLeadId(lead.id)
+                                  setScheduledAtLocal(defaultScheduleInput())
+                                  setScheduleError('')
+                                }}
+                                className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/55 rounded-lg text-xs hover:text-white hover:border-white/20 transition-colors whitespace-nowrap"
+                              >
+                                Plan
+                              </button>
+                            </div>
+
+                            {scheduleLeadId === lead.id && (
+                              <div className="flex flex-col gap-2">
+                                <input
+                                  type="datetime-local"
+                                  value={scheduledAtLocal}
+                                  onChange={(e) => setScheduledAtLocal(e.target.value)}
+                                  className="bg-surface-2 border border-subtle rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-white/20"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const parsed = parseScheduleInput(scheduledAtLocal)
+                                      if (!parsed.ok) {
+                                        setScheduleError(parsed.error)
+                                        return
+                                      }
+                                      sendEmail1(lead, parsed.iso)
+                                    }}
+                                    disabled={sending === lead.id}
+                                    className="px-2.5 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-lg text-xs hover:bg-blue-500/25 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                  >
+                                    Bevestig planning
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setScheduleLeadId(null)
+                                      setScheduleError('')
+                                    }}
+                                    className="px-2.5 py-1 bg-surface-2 border border-subtle text-white/45 rounded-lg text-xs hover:text-white/70 transition-colors whitespace-nowrap"
+                                  >
+                                    Annuleer
+                                  </button>
+                                </div>
+                                <p className="text-[11px] text-white/30">Alleen tussen 07:00 en 18:00</p>
+                                {scheduleError && <p className="text-[11px] text-red-400">{scheduleError}</p>}
+                              </div>
+                            )}
+                          </>
                         )}
                         {/* Other phases advance button */}
                         {NEXT_PHASE_LABEL[lead.status] && (

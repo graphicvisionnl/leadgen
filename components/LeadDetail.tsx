@@ -18,6 +18,52 @@ const REPLY_CLASS_LABELS: Record<ReplyClassification, { label: string; color: st
   other:           { label: 'Overig',           color: 'text-white/40' },
 }
 
+const SEGMENT_LABELS: Record<string, string> = {
+  ideal:        'Ideaal',
+  no_website:   'Geen website',
+  low_reviews:  'Weinig reviews',
+  high_reviews: 'Veel reviews',
+  high_rating:  'Hoge score',
+}
+
+const SEGMENT_COLORS: Record<string, string> = {
+  ideal:        'bg-green-500/10 text-green-400 border-green-500/20',
+  no_website:   'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  low_reviews:  'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  high_reviews: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  high_rating:  'bg-purple-500/10 text-purple-400 border-purple-500/20',
+}
+
+const CRM_OPTIONS: { value: CrmStatus; label: string; color: string }[] = [
+  { value: 'not_contacted', label: 'Niet benaderd', color: 'text-white/40' },
+  { value: 'contacted',     label: 'Benaderd',       color: 'text-blue-400' },
+  { value: 'replied',       label: 'Gereageerd',     color: 'text-yellow-400' },
+  { value: 'interested',    label: 'Geïnteresseerd', color: 'text-green-400' },
+  { value: 'closed',        label: 'Gesloten',       color: 'text-purple-400' },
+  { value: 'rejected',      label: 'Afgewezen',      color: 'text-red-400' },
+]
+
+function Collapsible({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border border-subtle rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-3.5 text-sm text-white/50 hover:text-white/70 hover:bg-white/[0.02] transition-colors"
+      >
+        <span className="font-medium text-white/60">{title}</span>
+        <span className="text-white/30 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-subtle bg-surface/50 px-5 py-5">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReplyPanel({ lead, onTriggered }: { lead: Lead; onTriggered: () => void }) {
   const [manualReply, setManualReply] = useState('')
   const [showManual, setShowManual] = useState(!lead.reply_received_at)
@@ -79,7 +125,6 @@ function ReplyPanel({ lead, onTriggered }: { lead: Lead; onTriggered: () => void
         </p>
       )}
 
-      {/* Manual reply input */}
       <div>
         <button
           onClick={() => setShowManual(v => !v)}
@@ -113,15 +158,6 @@ function ReplyPanel({ lead, onTriggered }: { lead: Lead; onTriggered: () => void
   )
 }
 
-const CRM_OPTIONS: { value: CrmStatus; label: string; color: string }[] = [
-  { value: 'not_contacted', label: 'Niet benaderd', color: 'text-white/40' },
-  { value: 'contacted',     label: 'Benaderd',       color: 'text-blue-400' },
-  { value: 'replied',       label: 'Gereageerd',     color: 'text-yellow-400' },
-  { value: 'interested',    label: 'Geïnteresseerd', color: 'text-green-400' },
-  { value: 'closed',        label: 'Gesloten',       color: 'text-purple-400' },
-  { value: 'rejected',      label: 'Afgewezen',      color: 'text-red-400' },
-]
-
 function toDateTimeLocalValue(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -131,17 +167,14 @@ function defaultScheduledTimeLocal(): string {
   const now = new Date()
   const target = new Date(now.getTime() + 30 * 60 * 1000)
   target.setSeconds(0, 0)
-
   const roundedMinutes = target.getMinutes() <= 30 ? 30 : 60
   target.setMinutes(roundedMinutes, 0, 0)
-
   if (target.getHours() < 7) {
     target.setHours(7, 0, 0, 0)
   } else if (target.getHours() >= 18) {
     target.setDate(target.getDate() + 1)
     target.setHours(7, 0, 0, 0)
   }
-
   return toDateTimeLocalValue(target)
 }
 
@@ -150,13 +183,31 @@ function validateScheduledLocal(value: string): { ok: true; iso: string } | { ok
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return { ok: false, error: 'Ongeldige datum/tijd' }
   if (date.getTime() <= Date.now()) return { ok: false, error: 'Kies een tijd in de toekomst' }
-
   const minutes = date.getHours() * 60 + date.getMinutes()
   if (minutes < 7 * 60 || minutes >= 18 * 60) {
     return { ok: false, error: 'Plan tussen 07:00 en 18:00' }
   }
-
   return { ok: true, iso: date.toISOString() }
+}
+
+function deriveNextAction(lead: Lead): { text: string; color: string } | null {
+  if (lead.reply_received_at && !lead.email2_draft_ready)
+    return { text: 'Verwerk reply', color: 'text-green-400' }
+  if (lead.reply_received_at && lead.email2_draft_ready)
+    return { text: 'Stuur reactie-mail', color: 'text-green-400' }
+  if (lead.next_followup_at && !lead.sequence_stopped && isPast(new Date(lead.next_followup_at)))
+    return { text: 'Follow-up klaar om te sturen', color: 'text-yellow-400' }
+  if (lead.status === 'qualified' && lead.email1_subject && !lead.email1_sent_at)
+    return { text: 'Stuur email 1', color: 'text-blue-400' }
+  if (lead.status === 'qualified' && !lead.email1_subject)
+    return { text: 'Genereer e-mailreeks', color: 'text-white/60' }
+  if (lead.status === 'sent' && lead.sequence_stopped)
+    return { text: 'Sequentie gestopt', color: 'text-white/30' }
+  if (lead.status === 'sent')
+    return { text: 'Wachten op reactie', color: 'text-white/40' }
+  if (['scraped', 'no_email', 'error'].includes(lead.status))
+    return { text: 'Kwalificeren', color: 'text-white/50' }
+  return null
 }
 
 interface LeadDetailProps {
@@ -168,11 +219,9 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [lead, setLead] = useState(initialLead)
   const [deleting, setDeleting] = useState(false)
 
-  // CRM state
   const [crmUpdating, setCrmUpdating] = useState(false)
 
-  // Sequence state
-  const [activeEmailTab, setActiveEmailTab] = useState(0)  // 0-3 for emails 1-4
+  const [activeEmailTab, setActiveEmailTab] = useState(0)
   const [activeVariantTab, setActiveVariantTab] = useState(lead.selected_variant ?? 0)
   const [generatingSequence, setGeneratingSequence] = useState(false)
   const [generatingVariants, setGeneratingVariants] = useState(false)
@@ -184,7 +233,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [scheduledAtLocal, setScheduledAtLocal] = useState(defaultScheduledTimeLocal())
   const [stoppingSequence, setStoppingSequence] = useState(false)
 
-  // Per-email editable state
   const [emailFields, setEmailFields] = useState({
     email1_subject: lead.email1_subject ?? lead.email_subject ?? '',
     email1_body:    lead.email1_body    ?? lead.email_body    ?? '',
@@ -210,7 +258,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     if (!confirm(`"${lead.company_name}" verwijderen? Dit kan niet ongedaan worden gemaakt.`)) return
     setDeleting(true)
     await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
-    router.push('/')
+    router.push('/leads')
   }
 
   async function updateCrm(status: CrmStatus) {
@@ -283,7 +331,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
     setSendError('')
     setSendSuccess('')
     try {
-      // If emailTo was typed manually and differs from stored email, save it first
       if (emailTo && emailTo !== lead.email) {
         await fetch(`/api/leads/${lead.id}`, {
           method: 'PATCH',
@@ -312,7 +359,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
           next_followup_at: data.next_followup_at,
           [`email${emailIdx}_sent_at`]: data.sent_at ?? new Date().toISOString(),
         }))
-        if (emailIdx < 4) setActiveEmailTab(emailIdx)  // jump to next email
+        if (emailIdx < 4) setActiveEmailTab(emailIdx)
         setSendSuccess(`Email ${emailIdx} verstuurd`)
       } else {
         setSendError(data.error ?? 'Onbekende fout')
@@ -339,9 +386,12 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   }
 
   const sb: ScoreBreakdown | null = lead.score_breakdown ?? null
+  const nextAction = deriveNextAction(lead)
+  const activeCrm = CRM_OPTIONS.find(o => o.value === (lead.crm_status ?? 'not_contacted'))
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -350,6 +400,11 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
             {lead.hot_lead && (
               <span className="px-2 py-0.5 bg-yellow-400/15 border border-yellow-400/30 text-yellow-400 text-xs font-semibold rounded-full">
                 🔥 Hot lead
+              </span>
+            )}
+            {lead.segment && (
+              <span className={`px-2 py-0.5 border rounded-full text-xs font-medium ${SEGMENT_COLORS[lead.segment] ?? 'bg-white/5 text-white/40 border-subtle'}`}>
+                {SEGMENT_LABELS[lead.segment] ?? lead.segment}
               </span>
             )}
           </div>
@@ -377,120 +432,25 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
         </div>
       </div>
 
-      {/* Score breakdown */}
-      {(lead.lead_score !== null || sb) && (
-        <div className="bg-surface rounded-xl border border-subtle p-5">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-white/40 text-xs uppercase tracking-wider">Lead score</p>
-            {lead.lead_score !== null && (
-              <span className={`text-lg font-bold ${(lead.lead_score ?? 0) >= 65 ? 'text-yellow-400' : 'text-white'}`}>
-                {lead.lead_score} / 100
-              </span>
-            )}
+      {/* Decision bar */}
+      <div className="flex items-center gap-4 flex-wrap bg-surface border border-subtle rounded-xl px-5 py-3.5">
+        {nextAction && (
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" style={{ color: 'inherit' }} />
+            <span className={`text-sm font-medium ${nextAction.color}`}>{nextAction.text}</span>
           </div>
-          {sb && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[
-                { key: 'website_exists',      label: 'Website' },
-                { key: 'email_found',         label: 'Email' },
-                { key: 'phone_found',         label: 'Telefoon' },
-                { key: 'outdated_feel',       label: 'Verouderd' },
-                { key: 'mobile_friendly',     label: 'Mobiel'},
-                { key: 'has_cta',             label: 'CTA' },
-              ].map(({ key, label }) => {
-                const val = sb[key as keyof ScoreBreakdown]
-                const isOpportunity = key === 'outdated_feel' || key === 'mobile_friendly' || key === 'has_cta'
-                const positive = isOpportunity ? !val : !!val
-                return (
-                  <div key={key} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${positive ? 'bg-green-500/10 text-green-400' : 'bg-white/5 text-white/30'}`}>
-                    <span>{positive ? '✓' : '✗'}</span>
-                    <span>{label}</span>
-                    {isOpportunity && !val && <span className="ml-auto text-yellow-400/60">kans</span>}
-                  </div>
-                )
-              })}
-              {sb.internal_link_count !== undefined && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs bg-white/5 text-white/40">
-                  <span>{sb.internal_link_count} interne links</span>
-                </div>
-              )}
-            </div>
-          )}
-          {lead.qualify_reason && (
-            <p className="text-white/50 text-sm mt-3 pt-3 border-t border-subtle">{lead.qualify_reason}</p>
-          )}
-        </div>
-      )}
-
-      {/* Contact data */}
-      <div className="bg-surface rounded-xl border border-subtle p-5">
-        <p className="text-white/40 text-xs uppercase tracking-wider mb-4">Contact</p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {lead.website_url && (
-            <a href={lead.website_url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
-              <span>🌐</span>
-              <span className="truncate">{lead.website_url.replace(/^https?:\/\//, '').split('/')[0]}</span>
-            </a>
-          )}
-          {lead.email && (
-            <a href={`mailto:${lead.email}`}
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
-              <span>✉</span>
-              <span className="truncate">{lead.email}</span>
-            </a>
-          )}
-          {lead.phone && (
-            <a href={`tel:${lead.phone}`}
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
-              <span>📞</span>
-              <span>{lead.phone}</span>
-            </a>
-          )}
-          {lead.whatsapp_url && (
-            <a href={lead.whatsapp_url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-green-400 hover:text-green-300 transition-colors">
-              <span>💬</span>
-              <span>WhatsApp</span>
-            </a>
-          )}
-          {lead.facebook_url && (
-            <a href={lead.facebook_url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
-              <span>f</span>
-              <span>Facebook</span>
-            </a>
-          )}
-          {lead.instagram_url && (
-            <a href={lead.instagram_url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
-              <span>📷</span>
-              <span>Instagram</span>
-            </a>
-          )}
-          {lead.preview_url && (
-            <a href={lead.preview_url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 bg-brand/10 border border-brand/20 rounded-lg text-xs text-brand hover:text-brand/80 transition-colors">
-              <span>→</span>
-              <span>Preview bekijken</span>
-            </a>
-          )}
-        </div>
-      </div>
-
-      {/* CRM status */}
-      <div className="bg-surface rounded-xl border border-subtle p-5">
-        <p className="text-white/40 text-xs uppercase tracking-wider mb-3">CRM status</p>
-        <div className="flex flex-wrap gap-2">
+        )}
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
+          <span className="text-xs text-white/30">CRM:</span>
           {CRM_OPTIONS.map(opt => (
             <button
               key={opt.value}
               onClick={() => updateCrm(opt.value)}
               disabled={crmUpdating}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
                 (lead.crm_status ?? 'not_contacted') === opt.value
                   ? `border-current bg-white/5 ${opt.color}`
-                  : 'border-subtle text-white/35 hover:text-white/60 hover:border-white/20'
+                  : 'border-transparent text-white/25 hover:text-white/50 hover:border-subtle'
               }`}
             >
               {opt.label}
@@ -499,44 +459,13 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
         </div>
       </div>
 
-      {/* Screenshots */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div>
-          <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Originele website</p>
-          <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
-            {lead.screenshot_url ? (
-              <Image src={lead.screenshot_url} alt="Screenshot originele site"
-                width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
-            ) : (
-              <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
-            )}
-          </div>
-        </div>
-        <div>
-          <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Gegenereerde preview</p>
-          <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
-            {lead.preview_screenshot_url ? (
-              <Image src={lead.preview_screenshot_url} alt="Screenshot preview"
-                width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
-            ) : lead.preview_url ? (
-              <iframe src={lead.preview_url}
-                className="w-full h-full border-0 scale-[0.5] origin-top-left"
-                style={{ width: '200%', height: '200%' }} title="Preview" />
-            ) : (
-              <p className="text-white/25 text-sm">Preview nog niet gegenereerd</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Email sequence panel */}
-      {/* Reply panel — shown when a reply has been received */}
+      {/* Reply panel — shown first when reply received */}
       {lead.reply_received_at && (
         <ReplyPanel lead={lead} onTriggered={() => window.location.reload()} />
       )}
 
+      {/* Email sequence panel — primary action area */}
       <div className="bg-surface rounded-xl border border-subtle p-6 space-y-5">
-        {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <p className="text-white/40 text-xs uppercase tracking-wider">E-mailsequentie</p>
           <div className="flex items-center gap-2 flex-wrap">
@@ -573,7 +502,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
 
         {!emails[0].subject && !generatingSequence ? (
           <div className="py-8 text-center">
-            <p className="text-white/30 text-sm mb-4">Genereer de 4-mail reeks: Outreach → Reactie (placeholder) → Herinnering 1 → Herinnering 2</p>
+            <p className="text-white/30 text-sm mb-4">Genereer de 4-mail reeks: Outreach → Reactie → Herinnering 1 → Herinnering 2</p>
             <button onClick={generateSequence}
               className="px-5 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand/90 transition-colors">
               ✦ Genereer sequentie
@@ -586,7 +515,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
           </div>
         ) : (
           <>
-            {/* Email tabs */}
             <div className="flex gap-1 border-b border-subtle pb-0">
               {emails.map((e, i) => (
                 <button
@@ -604,7 +532,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
               ))}
             </div>
 
-            {/* Active email content */}
             {(() => {
               const email = emails[activeEmailTab]
               const subjectKey = `email${activeEmailTab + 1}_subject` as keyof typeof emailFields
@@ -614,7 +541,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
 
               return (
                 <div className="space-y-4">
-                  {/* Delivery type selector (email 1 only) */}
                   {activeEmailTab === 0 && (
                     <div className="space-y-2">
                       <p className="text-xs text-white/40">Email 1 type</p>
@@ -642,7 +568,6 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                     </div>
                   )}
 
-                  {/* A/B variants (email 1 only) */}
                   {activeEmailTab === 0 && (
                     <div className="flex items-center gap-2 flex-wrap">
                       {variants.map((v, i) => (
@@ -673,7 +598,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                     </div>
                   )}
 
-                  {activeEmailTab !== 1 && (
+                  {activeEmailTab !== 1 ? (
                     <div>
                       <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
                       <input
@@ -683,13 +608,13 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                         className="w-full bg-surface-2 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
                       />
                     </div>
-                  )}
-                  {activeEmailTab === 1 && (
+                  ) : (
                     <div>
                       <label className="block text-xs text-white/40 mb-1.5">Onderwerp</label>
                       <p className="text-sm text-white/40 italic">Re: {lead.email1_subject ?? lead.email_subject ?? '…'}</p>
                     </div>
                   )}
+
                   <div>
                     <label className="block text-xs text-white/40 mb-1.5">Bericht</label>
                     <textarea
@@ -714,34 +639,16 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                       <div className="space-y-2">
                         <p className="text-xs text-white/40">Verzendmodus</p>
                         <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSendMode('now')}
-                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                              sendMode === 'now'
-                                ? 'border-white/25 bg-white/10 text-white'
-                                : 'border-subtle text-white/45 hover:text-white/70'
-                            }`}
-                          >
+                          <button type="button" onClick={() => setSendMode('now')}
+                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${sendMode === 'now' ? 'border-white/25 bg-white/10 text-white' : 'border-subtle text-white/45 hover:text-white/70'}`}>
                             Nu versturen
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSendMode('schedule')
-                              if (!scheduledAtLocal) setScheduledAtLocal(defaultScheduledTimeLocal())
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                              sendMode === 'schedule'
-                                ? 'border-white/25 bg-white/10 text-white'
-                                : 'border-subtle text-white/45 hover:text-white/70'
-                            }`}
-                          >
+                          <button type="button" onClick={() => { setSendMode('schedule'); if (!scheduledAtLocal) setScheduledAtLocal(defaultScheduledTimeLocal()) }}
+                            className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${sendMode === 'schedule' ? 'border-white/25 bg-white/10 text-white' : 'border-subtle text-white/45 hover:text-white/70'}`}>
                             Inplannen
                           </button>
                         </div>
                       </div>
-
                       {sendMode === 'schedule' && (
                         <div>
                           <label className="block text-xs text-white/40 mb-1.5">Verstuur op</label>
@@ -754,16 +661,12 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                           <p className="text-xs text-white/30 mt-1">Alleen tussen 07:00 en 18:00</p>
                         </div>
                       )}
-
                       <div className="flex items-center gap-3 flex-wrap">
                         <button
                           onClick={() => {
                             if (sendMode === 'schedule') {
                               const parsed = validateScheduledLocal(scheduledAtLocal)
-                              if (!parsed.ok) {
-                                setSendError(parsed.error)
-                                return
-                              }
+                              if (!parsed.ok) { setSendError(parsed.error); return }
                               sendEmail(activeEmailTab + 1, parsed.iso)
                               return
                             }
@@ -789,6 +692,134 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
           </>
         )}
       </div>
+
+      {/* Collapsible: Contact */}
+      <Collapsible title="Contact">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {lead.website_url && (
+            <a href={lead.website_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 bg-surface border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
+              <span>🌐</span>
+              <span className="truncate">{lead.website_url.replace(/^https?:\/\//, '').split('/')[0]}</span>
+            </a>
+          )}
+          {lead.email && (
+            <a href={`mailto:${lead.email}`}
+              className="flex items-center gap-2 px-3 py-2 bg-surface border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
+              <span>✉</span>
+              <span className="truncate">{lead.email}</span>
+            </a>
+          )}
+          {lead.phone && (
+            <a href={`tel:${lead.phone}`}
+              className="flex items-center gap-2 px-3 py-2 bg-surface border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
+              <span>📞</span>
+              <span>{lead.phone}</span>
+            </a>
+          )}
+          {lead.whatsapp_url && (
+            <a href={lead.whatsapp_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-green-400 hover:text-green-300 transition-colors">
+              <span>💬</span>
+              <span>WhatsApp</span>
+            </a>
+          )}
+          {lead.facebook_url && (
+            <a href={lead.facebook_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 bg-surface border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
+              <span>f</span>
+              <span>Facebook</span>
+            </a>
+          )}
+          {lead.instagram_url && (
+            <a href={lead.instagram_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 bg-surface border border-subtle rounded-lg text-xs text-white/60 hover:text-white transition-colors">
+              <span>📷</span>
+              <span>Instagram</span>
+            </a>
+          )}
+          {lead.preview_url && (
+            <a href={lead.preview_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 bg-brand/10 border border-brand/20 rounded-lg text-xs text-brand hover:text-brand/80 transition-colors">
+              <span>→</span>
+              <span>Preview bekijken</span>
+            </a>
+          )}
+          {!lead.website_url && !lead.email && !lead.phone && !lead.whatsapp_url && !lead.preview_url && (
+            <p className="text-white/25 text-sm col-span-3">Geen contactgegevens beschikbaar</p>
+          )}
+        </div>
+      </Collapsible>
+
+      {/* Collapsible: Lead score */}
+      {(lead.lead_score !== null || sb) && (
+        <Collapsible title={`Lead score${lead.lead_score !== null ? ` — ${lead.lead_score}/100` : ''}`}>
+          {sb && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { key: 'website_exists',  label: 'Website' },
+                { key: 'email_found',     label: 'Email' },
+                { key: 'phone_found',     label: 'Telefoon' },
+                { key: 'outdated_feel',   label: 'Verouderd' },
+                { key: 'mobile_friendly', label: 'Mobiel' },
+                { key: 'has_cta',         label: 'CTA' },
+              ].map(({ key, label }) => {
+                const val = sb[key as keyof ScoreBreakdown]
+                const isOpportunity = key === 'outdated_feel' || key === 'mobile_friendly' || key === 'has_cta'
+                const positive = isOpportunity ? !val : !!val
+                return (
+                  <div key={key} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${positive ? 'bg-green-500/10 text-green-400' : 'bg-white/5 text-white/30'}`}>
+                    <span>{positive ? '✓' : '✗'}</span>
+                    <span>{label}</span>
+                    {isOpportunity && !val && <span className="ml-auto text-yellow-400/60">kans</span>}
+                  </div>
+                )
+              })}
+              {sb.internal_link_count !== undefined && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs bg-white/5 text-white/40">
+                  <span>{sb.internal_link_count} interne links</span>
+                </div>
+              )}
+            </div>
+          )}
+          {lead.qualify_reason && (
+            <p className="text-white/50 text-sm mt-3 pt-3 border-t border-subtle">{lead.qualify_reason}</p>
+          )}
+        </Collapsible>
+      )}
+
+      {/* Collapsible: Screenshots */}
+      <Collapsible title="Screenshots">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Originele website</p>
+            <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
+              {lead.screenshot_url ? (
+                <Image src={lead.screenshot_url} alt="Screenshot originele site"
+                  width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
+              ) : (
+                <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
+              )}
+            </div>
+          </div>
+          <div>
+            <p className="text-white/40 text-xs uppercase tracking-wider mb-3">Gegenereerde preview</p>
+            <div className="bg-surface rounded-xl border border-subtle overflow-hidden aspect-video flex items-center justify-center">
+              {lead.preview_screenshot_url ? (
+                <Image src={lead.preview_screenshot_url} alt="Screenshot preview"
+                  width={640} height={360} className="w-full h-full object-cover object-top" unoptimized />
+              ) : lead.preview_url ? (
+                <iframe src={lead.preview_url}
+                  className="w-full h-full border-0 scale-[0.5] origin-top-left"
+                  style={{ width: '200%', height: '200%' }} title="Preview" />
+              ) : (
+                <p className="text-white/25 text-sm">Preview nog niet gegenereerd</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </Collapsible>
+
     </div>
   )
 }

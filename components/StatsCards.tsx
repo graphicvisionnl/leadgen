@@ -1,37 +1,70 @@
 'use client'
 
+import Link from 'next/link'
+
 interface StatsCardsProps {
   stats: {
-    scraped: number
-    qualified: number
-    deployed: number
-    sent: number
-    hot_leads?: number
+    email_ready?: number
+    replied?: number
     due_followups?: number
+    hot_leads?: number
   }
 }
 
 export function StatsCards({ stats }: StatsCardsProps) {
   const cards = [
-    { label: 'Gescraped',        value: stats.scraped,                   color: 'text-white' },
-    { label: 'Gekwalificeerd',   value: stats.qualified,                 color: 'text-blue-400' },
-    { label: 'Preview live',     value: stats.deployed,                  color: 'text-brand' },
-    { label: 'Mail verzonden',   value: stats.sent,                      color: 'text-green-400' },
-    { label: 'Hot leads',        value: stats.hot_leads ?? 0,            color: 'text-yellow-400' },
-    { label: 'Follow-ups klaar', value: stats.due_followups ?? 0,        color: 'text-red-400' },
+    {
+      label: 'Klaar om te sturen',
+      value: stats.email_ready ?? 0,
+      detail: 'Concept klaar, nog niet verzonden',
+      href: '/leads?filter=ready_to_send',
+      color: 'text-blue-400',
+      highlight: (stats.email_ready ?? 0) > 0,
+    },
+    {
+      label: 'Replies',
+      value: stats.replied ?? 0,
+      detail: 'Reacties ontvangen',
+      href: '/leads?filter=replied',
+      color: 'text-green-400',
+      highlight: (stats.replied ?? 0) > 0,
+    },
+    {
+      label: 'Follow-ups',
+      value: stats.due_followups ?? 0,
+      detail: 'Klaar om te versturen',
+      href: '/leads?filter=sent',
+      color: 'text-yellow-400',
+      highlight: (stats.due_followups ?? 0) > 0,
+    },
+    {
+      label: 'Hot leads',
+      value: stats.hot_leads ?? 0,
+      detail: 'Score ≥ 65, nog niet benaderd',
+      href: '/leads?filter=to_review',
+      color: 'text-brand',
+      highlight: (stats.hot_leads ?? 0) > 0,
+    },
   ]
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
       {cards.map((card) => (
-        <div key={card.label} className="bg-surface rounded-xl border border-subtle p-4">
-          <p className="text-white/40 text-xs font-medium uppercase tracking-wider mb-2">
+        <Link
+          key={card.label}
+          href={card.href}
+          className={`bg-surface rounded-lg border transition-colors p-5 hover:bg-white/[0.03] ${
+            card.highlight ? 'border-white/15 hover:border-white/25' : 'border-subtle hover:border-white/15'
+          }`}
+        >
+          <p className="text-white/40 text-xs font-medium uppercase tracking-wider mb-3">
             {card.label}
           </p>
-          <p className={`text-2xl font-bold ${card.color}`}>
+          <p className={`text-3xl font-bold ${card.color}`}>
             {card.value}
           </p>
-        </div>
+          <p className="text-white/30 text-xs mt-2">{card.detail}</p>
+        </Link>
       ))}
     </div>
   )
