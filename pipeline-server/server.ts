@@ -1230,9 +1230,9 @@ svg{position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 4px 10
   <img src="${imageDataUrl}" />
   <div class="label">${marker.label}</div>
   <svg viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <defs><marker id="arrow" markerWidth="13" markerHeight="13" refX="11" refY="6.5" orient="auto"><path d="M0,0 L13,6.5 L0,13 Z" fill="#ff3b30"/></marker></defs>
-    <line x1="${sx}" y1="${sy}" x2="${tx}" y2="${ty}" stroke="#ff3b30" stroke-width="10" stroke-linecap="round" marker-end="url(#arrow)"/>
-    <circle cx="${tx}" cy="${ty}" r="42" stroke="#ff3b30" stroke-width="8"/>
+    <defs><marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="34" markerHeight="34" refX="30" refY="17" orient="auto"><path d="M2,2 L32,17 L2,32 Z" fill="#ff3b30"/></marker></defs>
+    <line x1="${sx}" y1="${sy}" x2="${tx}" y2="${ty}" stroke="#ff3b30" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <circle cx="${tx}" cy="${ty}" r="30" stroke="#ff3b30" stroke-width="6"/>
   </svg>
 </div>
 </body></html>`, { waitUntil: 'load' })
