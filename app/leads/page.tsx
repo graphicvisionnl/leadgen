@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { LeadsTable } from '@/components/LeadsTable'
 import { PaginationControls } from '@/components/PaginationControls'
@@ -16,7 +16,7 @@ const FILTER_TABS = [
   { value: 'skipped',     label: 'Overgeslagen' },
 ] as const
 
-export default function LeadsPage() {
+function LeadsPageContent() {
   const searchParams = useSearchParams()
   const initialFilter = searchParams.get('filter') ?? ''
 
@@ -120,5 +120,13 @@ export default function LeadsPage() {
         onPageChange={(p) => setPage(p)}
       />
     </div>
+  )
+}
+
+export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div className="text-white/40 text-sm">Leads laden...</div>}>
+      <LeadsPageContent />
+    </Suspense>
   )
 }
