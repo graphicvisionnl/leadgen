@@ -1113,6 +1113,125 @@ async function phase4(runId: string) {
 
 // ─── Pipeline helpers (used by auto /run) ────────────────────────────────────
 
+function derivePainpointMarker(lead: any): { targetX: number; targetY: number; startX: number; startY: number; label: string } {
+  const breakdown: Partial<ScoreBreakdown> = lead.score_breakdown ?? {}
+
+  if (breakdown.has_cta === false) {
+    return { targetX: 0.58, targetY: 0.24, startX: 0.22, startY: 0.12, label: 'Geen duidelijke CTA' }
+  }
+  if (breakdown.mobile_friendly === false) {
+    return { targetX: 0.78, targetY: 0.20, startX: 0.48, startY: 0.10, label: 'Mobiel onduidelijk' }
+  }
+  if (breakdown.outdated_feel === true) {
+    return { targetX: 0.34, targetY: 0.22, startX: 0.66, startY: 0.10, label: 'Verouderde eerste indruk' }
+  }
+  return { targetX: 0.50, targetY: 0.26, startX: 0.18, startY: 0.12, label: 'Hier haken bezoekers af' }
+}
+
+async function fetchExistingScreenshotBuffer(url: string | null | undefined): Promise<Buffer | null> {
+  if (!url) return null
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) })
+    if (!res.ok) return null
+    return Buffer.from(await res.arrayBuffer())
+  } catch {
+    return null
+  }
+}
+
+async function captureWebsiteScreenshotBuffer(browser: any, url: string | null | undefined): Promise<Buffer | null> {
+  if (!url) return null
+  const page = await browser.newPage()
+  try {
+    await page.setViewport({ width: 1365, height: 768, deviceScaleFactor: 1 })
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 25_000 })
+    const shot = await page.screenshot({ type: 'jpeg', quality: 76, fullPage: false })
+    return Buffer.from(shot)
+  } catch (e) {
+    log('Painpoint', `Live screenshot mislukt voor ${url}: ${e}`)
+    return null
+  } finally {
+    await page.close().catch(() => {})
+  }
+}
+
+async function annotatePainpointScreenshot(browser: any, imageBuffer: Buffer, lead: any): Promise<Buffer> {
+  const marker = derivePainpointMarker(lead)
+  const page = await browser.newPage()
+  const imageDataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`
+  const width = 900
+  const height = 506
+  const tx = Math.round(marker.targetX * width)
+  const ty = Math.round(marker.targetY * height)
+  const sx = Math.round(marker.startX * width)
+  const sy = Math.round(marker.startY * height)
+  const labelX = Math.max(18, Math.min(width - 290, sx - 20))
+  const labelY = Math.max(18, sy - 52)
+
+  try {
+    await page.setViewport({ width, height, deviceScaleFactor: 1 })
+    await page.setContent(`<!doctype html>
+<html><head><style>
+html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#111;font-family:Arial,sans-serif}
+.wrap{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:#111}
+img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
+svg{position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 4px 10px rgba(0,0,0,.45))}
+.label{position:absolute;left:${labelX}px;top:${labelY}px;background:#ff3b30;color:#fff;border-radius:8px;padding:10px 13px;font-size:20px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+</style></head><body>
+<div class="wrap">
+  <img src="${imageDataUrl}" />
+  <div class="label">${marker.label}</div>
+  <svg viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arrow" markerWidth="13" markerHeight="13" refX="11" refY="6.5" orient="auto"><path d="M0,0 L13,6.5 L0,13 Z" fill="#ff3b30"/></marker></defs>
+    <line x1="${sx}" y1="${sy}" x2="${tx}" y2="${ty}" stroke="#ff3b30" stroke-width="10" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <circle cx="${tx}" cy="${ty}" r="42" stroke="#ff3b30" stroke-width="8"/>
+  </svg>
+</div>
+</body></html>`, { waitUntil: 'load' })
+    const shot = await page.screenshot({ type: 'jpeg', quality: 82 })
+    return Buffer.from(shot)
+  } finally {
+    await page.close().catch(() => {})
+  }
+}
+
+async function ensurePainpointScreenshotForLead(lead: any): Promise<string | null> {
+  if (lead.painpoint_screenshot_url) return lead.painpoint_screenshot_url
+
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  try {
+    const sourceBuffer =
+      await fetchExistingScreenshotBuffer(lead.screenshot_url) ??
+      await captureWebsiteScreenshotBuffer(browser, lead.website_url)
+
+    if (!sourceBuffer) {
+      log('Painpoint', `Geen bron-screenshot voor ${lead.company_name}`)
+      return null
+    }
+
+    const annotated = await annotatePainpointScreenshot(browser, sourceBuffer, lead)
+    const filename = `${lead.id}-painpoint-auto.jpg`
+    const { error } = await supabase.storage
+      .from('screenshots')
+      .upload(filename, annotated, { contentType: 'image/jpeg', upsert: true })
+
+    if (error) throw new Error(error.message)
+
+    const url = supabase.storage.from('screenshots').getPublicUrl(filename).data.publicUrl
+    await supabase.from('leads').update({
+      painpoint_screenshot_url: url,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    log('Painpoint', `Automatische screenshot gemaakt voor ${lead.company_name}`)
+    return url
+  } catch (e) {
+    log('Painpoint', `Automatische screenshot mislukt voor ${lead.company_name}: ${e}`)
+    return null
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
+
 // Reusable: generate the 4-email sequence for a lead (same logic as the route)
 async function generateEmailSequenceForLead(lead: any) {
   const emailPrefix = (lead.email ?? '').split('@')[0].toLowerCase()
@@ -1173,8 +1292,11 @@ Geef ALLEEN dit JSON terug, niets anders:
 
   // Randomly assign variant type 50/50 if not already set
   const variantType: string = lead.email1_variant_type ?? (Math.random() < 0.5 ? 'text_only' : 'painpoint_screenshot')
+  const painpointScreenshotUrl = variantType === 'painpoint_screenshot'
+    ? await ensurePainpointScreenshotForLead(lead)
+    : lead.painpoint_screenshot_url
 
-  await supabase.from('leads').update({
+  const updatePayload: Record<string, any> = {
     email1_subject: emails.email1.subject, email1_body: emails.email1.body,
     email2_subject: emails.email2.subject, email2_body: emails.email2.body,
     email3_subject: emails.email3.subject, email3_body: emails.email3.body,
@@ -1182,7 +1304,10 @@ Geef ALLEEN dit JSON terug, niets anders:
     email_subject: emails.email1.subject,  email_body: emails.email1.body,
     email1_variant_type: variantType,
     updated_at: new Date().toISOString(),
-  }).eq('id', lead.id)
+  }
+  if (painpointScreenshotUrl) updatePayload.painpoint_screenshot_url = painpointScreenshotUrl
+
+  await supabase.from('leads').update(updatePayload).eq('id', lead.id)
 
   return emails
 }
@@ -1353,8 +1478,10 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
         if (imgResponse.ok) {
           const imgBuffer = Buffer.from(await imgResponse.arrayBuffer())
           if (imgBuffer.length <= 300 * 1024) {
-            attachments = [{ filename: 'site-check.png', content: imgBuffer, contentType: 'image/png' }]
-            log('Mail', `Screenshot bijgevoegd als site-check.png (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name}`)
+            const contentType = imgResponse.headers.get('content-type')?.includes('png') ? 'image/png' : 'image/jpeg'
+            const filename = contentType === 'image/png' ? 'site-check.png' : 'site-check.jpg'
+            attachments = [{ filename, content: imgBuffer, contentType }]
+            log('Mail', `Screenshot bijgevoegd als ${filename} (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name}`)
           } else {
             log('Mail', `Screenshot te groot (${Math.round(imgBuffer.length / 1024)}KB) voor ${lead.company_name} — stuur zonder bijlage`)
           }
@@ -1832,7 +1959,8 @@ app.post('/run', async (req, res) => {
         try {
           await generateEmailSequenceForLead(lead)
           if (mode === 'send') {
-            await sendEmailForLead(lead, 1)
+            const { data: freshLead } = await supabase.from('leads').select('*').eq('id', lead.id).single()
+            await sendEmailForLead(freshLead ?? lead, 1)
             emailed++
             await sleep(30_000) // 30s between sends for deliverability
           }
