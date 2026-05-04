@@ -1249,7 +1249,7 @@ async function ensurePainpointScreenshotForLead(lead: any): Promise<string | nul
     }
 
     const annotated = await annotatePainpointScreenshot(browser, livePainpoint.buffer, livePainpoint.marker)
-    const filename = `${lead.id}-painpoint-auto.jpg`
+    const filename = `${lead.id}-painpoint-auto-${Date.now()}.jpg`
     const { error } = await supabase.storage
       .from('screenshots')
       .upload(filename, annotated, { contentType: 'image/jpeg', upsert: true })
