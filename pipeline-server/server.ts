@@ -1894,6 +1894,29 @@ app.post('/run/phase2-single/:id', async (req, res) => {
   }
 })
 
+app.post('/generate-painpoint-screenshot/:id', async (req, res) => {
+  const { id } = req.params
+  const { force = false } = req.body ?? {}
+  const { data: lead } = await supabase.from('leads').select('*').eq('id', id).single()
+  if (!lead) return res.status(404).json({ error: 'Lead niet gevonden' })
+  if (!lead.website_url && !lead.screenshot_url) {
+    return res.status(400).json({ error: 'Geen website of screenshot beschikbaar' })
+  }
+
+  try {
+    const url = await ensurePainpointScreenshotForLead(force ? { ...lead, painpoint_screenshot_url: null } : lead)
+    if (!url) return res.status(500).json({ error: 'Screenshot genereren mislukt' })
+    await supabase.from('leads').update({
+      email1_variant_type: 'painpoint_screenshot',
+      updated_at: new Date().toISOString(),
+    }).eq('id', id)
+    res.json({ success: true, url })
+  } catch (e) {
+    log('Painpoint', `Route fout voor ${lead.company_name}: ${e}`)
+    res.status(500).json({ error: String(e) })
+  }
+})
+
 app.post('/run/phase4-single/:id', async (req, res) => {
   const { id } = req.params
   res.json({ success: true, message: 'Phase 4 single gestart' })

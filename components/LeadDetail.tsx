@@ -547,7 +547,39 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   }
 
   async function createAutomaticPainpointScreenshot() {
-    await createMarkedPainpointScreenshot(deriveAutomaticPainpoint())
+    if (lead.screenshot_url) {
+      await createMarkedPainpointScreenshot(deriveAutomaticPainpoint())
+      return
+    }
+
+    if (!lead.website_url) {
+      setPainpointError('Geen website beschikbaar om een screenshot te maken')
+      return
+    }
+
+    setSavingPainpoint(true)
+    setPainpointMessage('')
+    setPainpointError('')
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/painpoint-screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setPainpointError(data.error ?? 'Screenshot genereren mislukt')
+        return
+      }
+      setLead(l => ({
+        ...l,
+        painpoint_screenshot_url: data.url,
+        email1_variant_type: 'painpoint_screenshot',
+      }))
+      setPainpointMessage('Screenshot gegenereerd en geselecteerd voor email 1.')
+    } finally {
+      setSavingPainpoint(false)
+    }
   }
 
   async function stopSequence() {
@@ -1012,7 +1044,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
           <div>
             <div className="flex items-center justify-between gap-3 mb-3">
               <p className="text-white/40 text-xs uppercase tracking-wider">Originele website</p>
-              {lead.screenshot_url && (
+              {(lead.screenshot_url || lead.website_url) && (
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -1022,22 +1054,24 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                   >
                     {savingPainpoint ? 'Opslaan...' : 'Auto pijl maken'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMarkingPainpoint(v => !v)
-                      setPainpointMessage('')
-                      setPainpointError('')
-                    }}
-                    disabled={savingPainpoint}
-                    className={`px-2.5 py-1 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
-                      markingPainpoint
-                        ? 'border-red-400/40 bg-red-500/10 text-red-300'
-                        : 'border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20'
-                    }`}
-                  >
-                    {savingPainpoint ? 'Opslaan...' : markingPainpoint ? 'Klik zwak punt' : 'Pijl plaatsen'}
-                  </button>
+                  {lead.screenshot_url && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMarkingPainpoint(v => !v)
+                        setPainpointMessage('')
+                        setPainpointError('')
+                      }}
+                      disabled={savingPainpoint}
+                      className={`px-2.5 py-1 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
+                        markingPainpoint
+                          ? 'border-red-400/40 bg-red-500/10 text-red-300'
+                          : 'border-subtle bg-surface text-white/55 hover:text-white hover:border-white/20'
+                      }`}
+                    >
+                      {savingPainpoint ? 'Opslaan...' : markingPainpoint ? 'Klik zwak punt' : 'Pijl plaatsen'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1049,7 +1083,12 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
                   className={`w-full h-full object-cover object-top ${markingPainpoint ? 'cursor-crosshair' : ''}`}
                   unoptimized />
               ) : (
-                <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
+                <div className="text-center px-4">
+                  <p className="text-white/25 text-sm">Geen screenshot beschikbaar</p>
+                  {lead.website_url && (
+                    <p className="text-white/25 text-xs mt-2">Gebruik Auto pijl maken om er nu een te genereren.</p>
+                  )}
+                </div>
               )}
             </div>
             {markingPainpoint && (

@@ -9,13 +9,30 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { image } = await request.json().catch(() => ({ image: '' }))
+  const { image, force } = await request.json().catch(() => ({ image: '', force: false }))
   const match = typeof image === 'string'
     ? image.match(/^data:image\/(png|jpeg);base64,(.+)$/)
     : null
 
   if (!match) {
-    return NextResponse.json({ error: 'Ongeldige afbeelding' }, { status: 400 })
+    const pipelineUrl = process.env.PIPELINE_SERVER_URL
+    const pipelineSecret = process.env.PIPELINE_SECRET
+    if (!pipelineUrl || !pipelineSecret) {
+      return NextResponse.json({ error: 'Pipeline server niet geconfigureerd' }, { status: 500 })
+    }
+
+    const res = await fetch(`${pipelineUrl}/generate-painpoint-screenshot/${params.id}`, {
+      method: 'POST',
+      headers: { 'x-pipeline-secret': pipelineSecret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: force === true }),
+    }).catch(() => null)
+
+    if (!res) return NextResponse.json({ error: 'Pipeline fout' }, { status: 502 })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return NextResponse.json({ error: data.error ?? 'Screenshot genereren mislukt' }, { status: res.status })
+    }
+    return NextResponse.json(data)
   }
 
   const ext = match[1] === 'jpeg' ? 'jpg' : match[1]
