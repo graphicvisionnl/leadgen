@@ -320,13 +320,16 @@ function normalizeEmailNumber(raw: unknown): EmailNumber | null {
 
 function getFakeEmailReason(email: string | null | undefined): string | null {
   if (!email) return null
-  const normalized = email.trim().toLowerCase()
+  const normalized = normalizeRecipientEmail(email).toLowerCase()
   const match = normalized.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/)
   if (!match) return 'Ongeldig e-mailadres'
 
   const local = match[1].replace(/\+.*$/, '')
   const domain = match[2].replace(/^www\./, '')
-  const fakeDomains = new Set(['example.com', 'example.nl', 'test.com', 'test.nl', 'fake.com', 'dummy.com'])
+  const fakeDomains = new Set([
+    'example.com', 'example.nl', 'test.com', 'test.nl', 'fake.com', 'dummy.com',
+    'domain.com', 'jouwweb.nl', 'onepage.website',
+  ])
   const fakeLocals = new Set([
     'test', 'tester', 'testing', 'joedoe', 'joe.doe', 'johndoe', 'john.doe',
     'janedoe', 'jane.doe', 'dummy', 'fake', 'demo', 'example', 'mail', 'email',
@@ -335,10 +338,20 @@ function getFakeEmailReason(email: string | null | undefined): string | null {
 
   if (fakeDomains.has(domain)) return `Fake/test domein: ${domain}`
   if (fakeLocals.has(local)) return `Fake/test mailbox: ${local}`
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(domain)) return `Geen maildomein: ${domain}`
   if (/^(test|fake|dummy|demo)[._-]?\d*$/i.test(local)) return `Fake/test mailbox: ${local}`
   if (/^(joe|john|jane)[._-]?doe\d*$/i.test(local)) return `Placeholder mailbox: ${local}`
   if (local.includes('whatever')) return `Placeholder mailbox: ${local}`
   return null
+}
+
+function normalizeRecipientEmail(email: string | null | undefined): string {
+  const raw = (email ?? '').trim()
+  try {
+    return decodeURIComponent(raw).trim()
+  } catch {
+    return raw
+  }
 }
 
 function normalizeLeadSegment(raw: unknown): LeadSegment {
@@ -814,10 +827,12 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
   return result.qualified
 }
 
-async function phase2(runId: string) {
+async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {
   log('Phase 2', 'Email scrapen + kwalificeren')
-  const { data: leads } = await supabase.from('leads').select('*')
+  let query = supabase.from('leads').select('*')
     .in('status', ['scraped', 'no_email', 'error']).not('website_url', 'is', null)
+  if (opts.onlyRunId) query = query.eq('pipeline_run_id', runId)
+  const { data: leads } = await query
 
   if (!leads?.length) { log('Phase 2', 'Geen leads'); return }
   log('Phase 2', `${leads.length} leads`)
@@ -1463,6 +1478,24 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   const bodyKey = `email${emailNumber}_body` as const
   let body: string = lead[bodyKey] ?? lead.email_body ?? ''
   if (!body || !lead.email) throw new Error('Ontbrekende email data')
+  const recipientEmail = normalizeRecipientEmail(lead.email)
+  const fakeEmailReason = getFakeEmailReason(recipientEmail)
+  if (fakeEmailReason) {
+    await supabase.from('leads').update({
+      status: 'error',
+      qualify_reason: `E-mail verzenden geblokkeerd: ${fakeEmailReason}`,
+      next_followup_at: null,
+      sequence_stopped: true,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    throw new Error(`E-mail verzenden geblokkeerd voor ${lead.company_name}: ${fakeEmailReason} (${lead.email})`)
+  }
+  if (recipientEmail !== lead.email) {
+    await supabase.from('leads').update({
+      email: recipientEmail,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+  }
 
   // Email 2: always send as threaded reply on existing conversation
   const isThreadedReply = emailNumber === 2 && lead.reply_message_id
@@ -1551,7 +1584,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     }
     mailOptions = {
       from: `${account.name} <${account.email}>`,
-      to: lead.email,
+      to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       text: body,
@@ -1561,7 +1594,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     // Send as threaded reply — same account, Re: subject, In-Reply-To header
     mailOptions = {
       from: `${account.name} <${account.email}>`,
-      to: lead.email,
+      to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       html: buildEmailHtml(bodyToHtml(body, lead.preview_url ?? null)),
@@ -1575,7 +1608,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     // Plain text reminders — no HTML, no logo, human tone
     mailOptions = {
       from: `${account.name} <${account.email}>`,
-      to: lead.email,
+      to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       text: body,
@@ -1583,7 +1616,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   } else {
     mailOptions = {
       from: `${account.name} — Graphic Vision <${account.email}>`,
-      to: lead.email,
+      to: recipientEmail,
       bcc: 'graphicvisionnl@gmail.com',
       subject,
       html: buildEmailHtml(bodyToHtml(body, lead.preview_url ?? null)),
@@ -1617,7 +1650,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
-  log('Mail', `Email ${emailNumber} verstuurd naar ${lead.email} (${lead.company_name})${next_followup_at ? ` — volgende: ${new Date(next_followup_at).toLocaleString('nl-NL')}` : ' — sequentie afgerond'}`)
+  log('Mail', `Email ${emailNumber} verstuurd naar ${recipientEmail} (${lead.company_name})${next_followup_at ? ` — volgende: ${new Date(next_followup_at).toLocaleString('nl-NL')}` : ' — sequentie afgerond'}`)
   return { next_followup_at, sent_at: sentAt }
 }
 
@@ -1986,9 +2019,10 @@ app.post('/run/phase4-single/:id', async (req, res) => {
   } finally { await browser.close() }
 })
 
-app.post('/run/phase2', async (_, res) => {
+app.post('/run/phase2', async (req, res) => {
+  const { runId } = req.body ?? {}
   res.json({ success: true, message: 'Phase 2 gestart' })
-  phase2('manual').catch(e => log('Phase 2', `Fout: ${e}`))
+  phase2(runId || 'manual', { onlyRunId: Boolean(runId) }).catch(e => log('Phase 2', `Fout: ${e}`))
 })
 
 app.post('/run/phase3', async (_, res) => {
