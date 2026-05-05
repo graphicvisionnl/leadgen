@@ -366,6 +366,7 @@ function getFakeEmailReason(email: string | null | undefined): string | null {
   if (fakeDomains.has(domain)) return `Fake/test domein: ${domain}`
   if (fakeLocals.has(local)) return `Fake/test mailbox: ${local}`
   if (/\.(png|jpe?g|gif|webp|svg)$/i.test(domain)) return `Geen maildomein: ${domain}`
+  if (/\d{8,}/.test(local)) return `Waarschijnlijk samengeplakte tekst/telefoonnummer: ${local}`
   if (/^(test|fake|dummy|demo)[._-]?\d*$/i.test(local)) return `Fake/test mailbox: ${local}`
   if (/^(joe|john|jane)[._-]?doe\d*$/i.test(local)) return `Placeholder mailbox: ${local}`
   if (local.includes('whatever')) return `Placeholder mailbox: ${local}`
