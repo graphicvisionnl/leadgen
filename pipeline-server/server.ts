@@ -2139,13 +2139,17 @@ app.post('/run', async (req, res) => {
 
 // ─── Bulk: generate sequences + optionally send Email 1 for existing qualified leads ──
 app.post('/run/email-qualified', async (req, res) => {
-  const { mode = 'send' } = req.body
+  const { mode = 'send', runId } = req.body
   res.json({ success: true })
 
   ;(async () => {
-    const { data: leads } = await supabase
+    let query = supabase
       .from('leads').select('*').eq('status', 'qualified').not('email', 'is', null)
       .is('email1_sent_at', null) // Only leads that haven't been emailed yet
+    if (runId) query = query.eq('pipeline_run_id', runId)
+
+    const { data: leads } = await query
+    log('Email-qualified', `${leads?.length ?? 0} lead(s) verwerken${runId ? ` voor run ${runId}` : ''} (mode: ${mode})`)
 
     let count = 0
     for (const lead of leads ?? []) {
