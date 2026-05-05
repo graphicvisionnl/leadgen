@@ -58,31 +58,41 @@ async function callGemini(params: {
       })
       if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`)
       const data = await res.json()
-      if (data.code && data.code !== 200) throw new Error(`Gemini provider error: ${JSON.stringify(data)}`)
+      if (data.code && data.code !== 200) {
+        return await callClaudeFallback(params, `Gemini provider error: ${JSON.stringify(data)}`)
+      }
       if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`)
       const text = data.choices?.[0]?.message?.content
       if (!text) throw new Error(`Gemini: geen content in response`)
       return text
     } catch (e) {
       if (attempt === 3) {
-        log('Retry', `Gemini mislukt na 3 pogingen: ${formatError(e)} — probeer Claude fallback`)
-        const fallback = await callClaude({
-          max_tokens: params.max_tokens,
-          messages: params.messages,
-          system: params.system,
-        })
-        const text = fallback.content
-          ?.map((part: any) => typeof part === 'string' ? part : part.text ?? '')
-          .join('')
-          .trim()
-        if (!text) throw new Error('Claude fallback: geen content in response')
-        return text
+        return await callClaudeFallback(params, formatError(e))
       }
       log('Retry', `callGemini attempt ${attempt} mislukt: ${e} — wacht 30s`)
       await sleep(30_000)
     }
   }
   throw new Error('callGemini: alle pogingen mislukt')
+}
+
+async function callClaudeFallback(params: {
+  system?: string
+  messages: { role: 'user' | 'assistant'; content: string }[]
+  max_tokens: number
+}, reason: string): Promise<string> {
+  log('Retry', `Gemini niet beschikbaar: ${reason} — probeer Claude fallback`)
+  const fallback = await callClaude({
+    max_tokens: params.max_tokens,
+    messages: params.messages,
+    system: params.system,
+  })
+  const text = fallback.content
+    ?.map((part: any) => typeof part === 'string' ? part : part.text ?? '')
+    .join('')
+    .trim()
+  if (!text) throw new Error('Claude fallback: geen content in response')
+  return text
 }
 
 // ─── kie.ai Claude helper (kept for HTML redesign fallback) ──────────────────
