@@ -860,7 +860,7 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
 async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {
   log('Phase 2', 'Email scrapen + kwalificeren')
   let query = supabase.from('leads').select('*')
-    .in('status', ['scraped', 'no_email', 'error']).not('website_url', 'is', null)
+    .in('status', ['scraped', 'no_email', 'error'])
   if (opts.onlyRunId) query = query.eq('pipeline_run_id', runId)
   const { data: leads } = await query
 
@@ -870,6 +870,27 @@ async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {
   let qualified = 0
   for (const lead of leads) {
     try {
+      if (!lead.website_url) {
+        await supabase.from('leads').update({
+          status: 'qualified',
+          qualify_reason: 'Geen website gevonden — handmatige review/e-mailverrijking nodig.',
+          email: lead.email ?? null,
+          lead_score: lead.lead_score ?? 60,
+          score_breakdown: {
+            website_exists: false,
+            email_found: !!lead.email,
+            phone_found: false,
+            mobile_friendly: false,
+            has_cta: false,
+            outdated_feel: true,
+            internal_link_count: 0,
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
+        log('Phase 2', `${lead.company_name} — QUALIFIED (geen website)`)
+        qualified++
+        continue
+      }
       const q = await phase2SingleLead(lead)
       if (q) qualified++
     } catch (e) {
