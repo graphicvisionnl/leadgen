@@ -1537,6 +1537,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   const settings = Object.fromEntries(
     (settingsRows ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
   )
+  const outgoingBcc = settings.copy_outgoing_emails === 'false' ? undefined : 'graphicvisionnl@gmail.com'
 
   // Email 2: reply from the same account that received the client's reply
   // All others: use rotating account
@@ -1613,7 +1614,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     mailOptions = {
       from: `${account.name} <${account.email}>`,
       to: recipientEmail,
-      bcc: 'graphicvisionnl@gmail.com',
+      ...(outgoingBcc ? { bcc: outgoingBcc } : {}),
       subject,
       text: body,
       ...(attachments.length ? { attachments } : {}),
@@ -1623,7 +1624,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     mailOptions = {
       from: `${account.name} <${account.email}>`,
       to: recipientEmail,
-      bcc: 'graphicvisionnl@gmail.com',
+      ...(outgoingBcc ? { bcc: outgoingBcc } : {}),
       subject,
       html: buildEmailHtml(bodyToHtml(body, lead.preview_url ?? null)),
       text: body,
@@ -1637,7 +1638,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     mailOptions = {
       from: `${account.name} <${account.email}>`,
       to: recipientEmail,
-      bcc: 'graphicvisionnl@gmail.com',
+      ...(outgoingBcc ? { bcc: outgoingBcc } : {}),
       subject,
       text: body,
     }
@@ -1645,7 +1646,7 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
     mailOptions = {
       from: `${account.name} — Graphic Vision <${account.email}>`,
       to: recipientEmail,
-      bcc: 'graphicvisionnl@gmail.com',
+      ...(outgoingBcc ? { bcc: outgoingBcc } : {}),
       subject,
       html: buildEmailHtml(bodyToHtml(body, lead.preview_url ?? null)),
       text: body,

@@ -15,6 +15,7 @@ interface Settings {
   niches_list: string[]
   smtp_accounts: SmtpAccount[]
   max_leads: string
+  copy_outgoing_emails: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -23,6 +24,7 @@ const DEFAULT_SETTINGS: Settings = {
   niches_list: [],
   smtp_accounts: [],
   max_leads: '30',
+  copy_outgoing_emails: true,
 }
 
 const MODE_OPTIONS: { value: AutoMode; label: string; desc: string; color: string }[] = [
@@ -161,6 +163,7 @@ export default function SettingsPage() {
           niches_list: parseJsonArray(data.niches_list),
           smtp_accounts: parseJsonArray(data.smtp_accounts) as unknown as SmtpAccount[],
           max_leads: data.max_leads ?? '30',
+          copy_outgoing_emails: data.copy_outgoing_emails !== 'false',
         })
       })
   }, [])
@@ -183,6 +186,7 @@ export default function SettingsPage() {
           niches_list: JSON.stringify(settings.niches_list),
           smtp_accounts: JSON.stringify(settings.smtp_accounts),
           max_leads: settings.max_leads,
+          copy_outgoing_emails: String(settings.copy_outgoing_emails),
         }),
       })
       setSaved(true)
@@ -296,6 +300,33 @@ export default function SettingsPage() {
           <div className="p-4">
             <AddAccountRow onAdd={acc => setSettings(s => ({ ...s, smtp_accounts: [...s.smtp_accounts, acc] }))} />
           </div>
+        </div>
+      </div>
+
+      {/* Email control */}
+      <div className="bg-surface rounded-xl border border-subtle p-5">
+        <div className="flex items-start justify-between gap-5">
+          <div>
+            <h2 className="font-semibold text-sm">Controlekopieen</h2>
+            <p className="text-white/40 text-xs mt-1">
+              Stuur een BCC-kopie van elke uitgaande mail naar graphicvisionnl@gmail.com.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSettings(s => ({ ...s, copy_outgoing_emails: !s.copy_outgoing_emails }))}
+            className={`relative mt-0.5 h-7 w-12 rounded-full border transition-colors ${
+              settings.copy_outgoing_emails ? 'bg-brand border-brand' : 'bg-white/8 border-subtle'
+            }`}
+            aria-pressed={settings.copy_outgoing_emails}
+            aria-label="Controlekopieen aan of uit zetten"
+          >
+            <span
+              className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${
+                settings.copy_outgoing_emails ? 'translate-x-5' : 'translate-x-1'
+              }`}
+            />
+          </button>
         </div>
       </div>
 
