@@ -534,12 +534,15 @@ async function removeScheduledEmailJobsForLead(leadId: string): Promise<number> 
 
 // ─── Phase 1: Apify ──────────────────────────────────────────────────────────
 async function phase1(runId: string, niche: string, city: string, maxLeads: number) {
-  log('Phase 1', `Scraping "${niche}" in "${city}" (max ${maxLeads})`)
+  const requestedMaxLeads = Math.max(1, Math.floor(Number(maxLeads) || 10))
+  log('Phase 1', `Scraping "${niche}" in "${city}" (max ${requestedMaxLeads})`)
   const token = process.env.APIFY_API_TOKEN!
 
   // Use intent-based search terms per niche; fall back to niche name alone
   const searchTerms = NICHE_SEARCH_TERMS[niche.toLowerCase()] ?? [niche]
   log('Phase 1', `Zoektermen: ${searchTerms.join(', ')}`)
+  const maxPerSearch = Math.max(1, Math.ceil(requestedMaxLeads / searchTerms.length))
+  log('Phase 1', `Apify limiet: ${maxPerSearch} per zoekterm × ${searchTerms.length} zoekterm(en) ≈ max ${maxPerSearch * searchTerms.length}`)
 
   const startRes = await fetch(
     `https://api.apify.com/v2/acts/nwua9Gu5YrADL7ZDj/runs?token=${token}`,
@@ -549,7 +552,7 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
       body: JSON.stringify({
         searchStringsArray: searchTerms,
         locationQuery: `${city}, Nederland`,
-        maxCrawledPlaces: maxLeads,
+        maxCrawledPlacesPerSearch: maxPerSearch,
         language: 'nl',
       }),
     }

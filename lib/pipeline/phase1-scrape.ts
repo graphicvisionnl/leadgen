@@ -28,6 +28,7 @@ export async function runScrapePhase(
 ): Promise<number> {
   const supabase = createServerSupabaseClient()
   const token = process.env.APIFY_API_TOKEN!
+  const requestedMaxLeads = Math.max(1, Math.floor(Number(maxLeads) || 30))
 
   // Start Apify actor run
   // Actor: nwua9Gu5YrADL7ZDj — Google Maps Email Extractor (lukaskrivka)
@@ -38,7 +39,7 @@ export async function runScrapePhase(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         searchString: `${niche} ${city}`,
-        maxCrawledPlaces: maxLeads,
+        maxCrawledPlacesPerSearch: requestedMaxLeads,
         language: 'nl',
       }),
     }
@@ -90,7 +91,7 @@ export async function runScrapePhase(
 
   // Fetch dataset results
   const resultsRes = await fetch(
-    `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=${maxLeads}`
+    `https://api.apify.com/v2/actor-runs/${actorRunId}/dataset/items?token=${token}&limit=1000`
   )
   const businesses: ApifyBusinessResult[] = await resultsRes.json()
 
