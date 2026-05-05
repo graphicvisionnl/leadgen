@@ -398,78 +398,77 @@ function leadSearchLine(lead: any): string {
   return `Ik kwam jullie tegen toen ik zocht naar ${niche} in ${city}`
 }
 
+function websitePainpointLine(lead: any, fallback: string): string {
+  const reason = typeof lead.qualify_reason === 'string'
+    ? lead.qualify_reason.replace(/^Score:\s*\d+\/10\s*—\s*/i, '').trim()
+    : ''
+
+  if (!reason) return fallback
+
+  return reason
+    .replace(/\.$/, '')
+    .replace(/^De website tekst is /i, 'De website komt over als ')
+    .replace(/^De site /i, 'De site ')
+}
+
+function buildRedesignEmailBody(lead: any, painpoint: string): string {
+  return `Goedemiddag,
+
+${leadSearchLine(lead)}.
+
+Wat me opviel: ${painpoint}.
+
+Daarom heb ik alvast gratis een redesign/concept voor jullie website gemaakt.
+Geen verplichtingen — puur om te laten zien hoe jullie site duidelijker en sterker kan overkomen.
+
+Zijn jullie geïnteresseerd om deze te zien?
+
+– Graphic Vision`
+}
+
 function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
   const segment = normalizeLeadSegment(lead.segment)
-  const intro = leadSearchLine(lead)
 
   const templates: Record<LeadSegment, Omit<SegmentEmailTemplate, 'segment'>> = {
     ideal: {
       template: 'ideal',
       subject: 'Snelle vraag over jullie website',
-      body: `${intro}
-
-1 ding viel me op
-
-Jullie website stuurt bezoekers niet echt duidelijk naar een volgende stap
-waardoor mensen waarschijnlijk afhaken
-
-Zal ik laten zien hoe dit beter ingericht kan worden?
-
-– Graphic Vision`,
+      body: buildRedesignEmailBody(
+        lead,
+        websitePainpointLine(lead, 'de website stuurt bezoekers niet duidelijk genoeg naar een volgende stap, waardoor aanvragen kunnen afhaken')
+      ),
     },
     no_website: {
       template: 'no_website',
       subject: 'Snelle vraag',
-      body: `${intro}
-
-Viel me op dat jullie nog geen echte website hebben
-
-Daardoor mis je waarschijnlijk klanten die via Google zoeken
-
-Zal ik laten zien hoe je dit simpel kunt oplossen?
-
-– Graphic Vision`,
+      body: buildRedesignEmailBody(
+        lead,
+        websitePainpointLine(lead, 'er lijkt nog geen sterke eigen website te staan, terwijl mensen via Google wel snel willen zien of ze jullie kunnen vertrouwen')
+      ),
     },
     low_reviews: {
       template: 'low_reviews',
       subject: 'Korte vraag',
-      body: `${intro}
-
-Wat me opviel is dat jullie nog weinig reviews hebben
-
-Daardoor kan het lastig zijn om vertrouwen te winnen bij nieuwe klanten
-
-Een sterke website kan dat deels opvangen
-
-Zal ik laten zien wat ik bedoel?
-
-– Graphic Vision`,
+      body: buildRedesignEmailBody(
+        lead,
+        websitePainpointLine(lead, 'er is online nog weinig vertrouwen zichtbaar, waardoor de website extra duidelijk moet uitleggen waarom klanten voor jullie kiezen')
+      ),
     },
     high_reviews: {
       template: 'high_reviews',
       subject: 'Snelle vraag over jullie site',
-      body: `${intro}
-
-Jullie hebben al behoorlijk wat reviews
-
-Alleen de website zelf laat nog kansen liggen om meer aanvragen eruit te halen
-
-Zal ik laten zien wat ik bedoel?
-
-– Graphic Vision`,
+      body: buildRedesignEmailBody(
+        lead,
+        websitePainpointLine(lead, 'jullie hebben al reviews, maar de website kan die betrouwbaarheid sterker gebruiken om meer aanvragen binnen te halen')
+      ),
     },
     high_rating: {
       template: 'high_rating',
       subject: 'Korte vraag',
-      body: `${intro}
-
-Ziet er goed uit wat jullie doen
-
-Alleen op de website zelf zie ik nog kansen om meer uit bezoekers te halen
-
-Zal ik dat even laten zien?
-
-– Graphic Vision`,
+      body: buildRedesignEmailBody(
+        lead,
+        websitePainpointLine(lead, 'jullie komen goed over, maar de website kan bezoekers nog duidelijker sturen naar contact of aanvraag')
+      ),
     },
   }
 
@@ -1354,19 +1353,24 @@ Gebruik exact deze subject en body:
 subject="${email1.subject}"
 body=${JSON.stringify(email1.body)}
 
+BELANGRIJK VOOR DE HELE REEKS:
+- Graphic Vision verkoopt geen algemeen advies, maar een concreet gratis redesign/concept.
+- Verwijs in follow-ups terug naar dat gratis redesign/concept.
+- Houd de toon kort, direct en menselijk.
+
 MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
 Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
 
 MAIL 3 — HERINNERING 1 (dag 3)
 - Begin met "${greeting}"
 - Super kort — max 2-3 zinnen
-- Verwijs terug naar mail 1, vraag of ze het gemist hebben
+- Verwijs terug naar het gratis redesign/concept uit mail 1, vraag of ze het willen zien
 - GEEN links, GEEN preview URL
 - Afsluiting EXACT: "– Graphic Vision"
 
 MAIL 4 — HERINNERING 2 (dag 6)
 - Begin met "${greeting}"
-- Sluit het dossier af — "Ik sluit het bestand van jullie" — kort en vriendelijk
+- Sluit het dossier af — "Ik sluit het gratis concept voor jullie" — kort en vriendelijk
 - GEEN links, GEEN preview URL
 - Afsluiting EXACT: "– Graphic Vision"
 
