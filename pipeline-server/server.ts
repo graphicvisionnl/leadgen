@@ -66,6 +66,9 @@ async function callGemini(params: {
       if (!text) throw new Error(`Gemini: geen content in response`)
       return text
     } catch (e) {
+      if (String(e).includes('TimeoutError') || String(e).includes('aborted due to timeout')) {
+        return await callClaudeFallback(params, formatError(e))
+      }
       if (attempt === 3) {
         return await callClaudeFallback(params, formatError(e))
       }
