@@ -211,6 +211,12 @@ function log(phase: string, msg: string) {
   if (logBuffer.length > 300) logBuffer.shift()
 }
 
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.stack ?? error.message
+  if (typeof error === 'string') return error
+  try { return JSON.stringify(error) } catch { return String(error) }
+}
+
 function normalizeUrl(url: string): string {
   const withProtocol = url.startsWith('http') ? url : `https://${url}`
   const parsed = new URL(withProtocol)
@@ -591,7 +597,6 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
     email:           b.email ?? null,
     city:            b.city ?? city,
     niche,
-    segment:         b._segment as LeadSegment,
     google_rating:   b.totalScore ?? null,
     review_count:    b.reviewsCount ?? null,
     status:          'scraped' as const,
@@ -600,7 +605,7 @@ async function phase1(runId: string, niche: string, city: string, maxLeads: numb
 
   if (!toInsert.length) { log('Phase 1', 'Geen nieuwe leads om in te voegen'); return 0 }
   const { data: inserted, error } = await supabase.from('leads').insert(toInsert).select('id')
-  if (error) throw error
+  if (error) throw new Error(formatError(error))
   log('Phase 1', `${inserted?.length} leads ingevoegd — ${businesses.length} raw → ${skippedClosed + skippedJunk + batchDupes + dbDupWebsite} overgeslagen → ${inserted?.length} nieuw`)
   await supabase.from('pipeline_runs').update({ scraped_count: inserted?.length ?? 0 }).eq('id', runId)
   return inserted?.length ?? 0
@@ -2038,7 +2043,7 @@ app.post('/run', async (req, res) => {
             await sleep(30_000) // 30s between sends for deliverability
           }
         } catch (e) {
-          log('Pipeline', `Email 1 fout voor ${lead.company_name}: ${e}`)
+          log('Pipeline', `Email 1 fout voor ${lead.company_name}: ${formatError(e)}`)
         }
       }
 
@@ -2054,9 +2059,10 @@ app.post('/run', async (req, res) => {
       // Send summary notification
       await sendRunNotification({ niche, city, scraped: scraped ?? 0, qualified, emailed, mode, failed: false })
     } catch (e) {
-      log('Pipeline', `Run ${run!.id} mislukt: ${e}`)
-      await supabase.from('pipeline_runs').update({ status: 'failed', error: String(e) }).eq('id', run!.id)
-      await sendRunNotification({ niche, city, scraped: 0, qualified: 0, emailed: 0, mode, failed: true, error: String(e) })
+      const errorMessage = formatError(e)
+      log('Pipeline', `Run ${run!.id} mislukt: ${errorMessage}`)
+      await supabase.from('pipeline_runs').update({ status: 'failed', error: errorMessage }).eq('id', run!.id)
+      await sendRunNotification({ niche, city, scraped: 0, qualified: 0, emailed: 0, mode, failed: true, error: errorMessage })
     }
   })()
 })
