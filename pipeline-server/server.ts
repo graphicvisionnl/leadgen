@@ -359,7 +359,7 @@ function getFakeEmailReason(email: string | null | undefined): string | null {
   ])
   const fakeLocals = new Set([
     'test', 'tester', 'testing', 'joedoe', 'joe.doe', 'johndoe', 'john.doe',
-    'janedoe', 'jane.doe', 'dummy', 'fake', 'demo', 'example', 'mail', 'email',
+    'janedoe', 'jane.doe', 'dummy', 'fake', 'demo', 'example', 'email',
     'name', 'naam', 'voornaam', 'achternaam', 'firstname', 'lastname',
   ])
 

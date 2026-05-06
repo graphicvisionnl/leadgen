@@ -12,7 +12,6 @@ const FAKE_EMAIL_LOCALS = new Set([
   'fake',
   'demo',
   'example',
-  'mail',
   'email',
   'name',
   'naam',
