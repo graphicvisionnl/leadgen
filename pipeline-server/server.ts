@@ -695,24 +695,91 @@ interface LeadSignals {
   text: string
 }
 
-async function scrapeLeadSignals(url: string): Promise<LeadSignals> {
-  const empty: LeadSignals = { email: null, phone: null, whatsapp_url: null, facebook_url: null, instagram_url: null, has_cta: false, internal_link_count: 0, text: '' }
+function extractEmailsFromHtml(html: string, url: string): string[] {
+  const searchableHtml = stripHtmlComments(html)
+  const mailtoMatches = [...searchableHtml.matchAll(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi)]
+    .map(match => match[1])
+  const emailsInPage = searchableHtml.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? []
+  const seen = new Set<string>()
+  return [...mailtoMatches, ...emailsInPage]
+    .map(email => email.toLowerCase().trim())
+    .filter(email => {
+      if (seen.has(email)) return false
+      seen.add(email)
+      return !email.includes('sentry') &&
+        !email.includes('example') &&
+        !email.includes('noreply') &&
+        !email.includes('@w3.org') &&
+        !isLikelyAgencyCreditEmail(email, url, html) &&
+        !getFakeEmailReason(email)
+    })
+}
+
+function resolveInternalUrl(href: string, baseUrl: string): string | null {
+  try {
+    const url = new URL(href, baseUrl)
+    const base = new URL(baseUrl)
+    if (url.hostname.replace(/^www\./, '') !== base.hostname.replace(/^www\./, '')) return null
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+function getContactUrls(html: string, baseUrl: string): string[] {
+  const searchableHtml = stripHtmlComments(html)
+  const hrefs = (searchableHtml.match(/href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi) ?? [])
+    .map(match => match.match(/href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i))
+    .map(match => match?.[1] ?? match?.[2] ?? match?.[3] ?? '')
+    .filter(Boolean)
+
+  const contactUrls = hrefs
+    .filter(href => /contact|kontakt|over-ons|overons|about|impressum|footer/i.test(href))
+    .map(href => resolveInternalUrl(href, baseUrl))
+    .filter((url): url is string => Boolean(url))
+
+  const origin = new URL(baseUrl).origin
+  return [...new Set([
+    ...contactUrls,
+    `${origin}/contact`,
+    `${origin}/contact/`,
+    `${origin}/contact-us`,
+    `${origin}/over-ons`,
+  ])].slice(0, 6)
+}
+
+async function fetchHtml(url: string, timeoutMs = 10000): Promise<string | null> {
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)', 'Accept-Language': 'nl,en;q=0.9' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: 'follow',
     })
-    if (!res.ok) return empty
-    const html = await res.text()
+    if (!res.ok) return null
+    return await res.text()
+  } catch {
+    return null
+  }
+}
+
+async function scrapeLeadSignals(url: string): Promise<LeadSignals> {
+  const empty: LeadSignals = { email: null, phone: null, whatsapp_url: null, facebook_url: null, instagram_url: null, has_cta: false, internal_link_count: 0, text: '' }
+  try {
+    const html = await fetchHtml(url)
+    if (!html) return empty
     const searchableHtml = stripHtmlComments(html)
 
     // Email
-    const mailto = searchableHtml.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
-    const emailsInPage = (searchableHtml.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
-      .filter(e => !e.includes('sentry') && !e.includes('example') && !e.includes('noreply') && !e.includes('@w3.org'))
-    const emailCandidates = [mailto?.[1], ...emailsInPage].filter(Boolean).map(e => e!.toLowerCase())
-    const email = emailCandidates.find(e => !isLikelyAgencyCreditEmail(e, url, html)) ?? null
+    let email = extractEmailsFromHtml(html, url)[0] ?? null
+    if (!email) {
+      for (const contactUrl of getContactUrls(html, url)) {
+        const contactHtml = await fetchHtml(contactUrl, 8000)
+        if (!contactHtml) continue
+        email = extractEmailsFromHtml(contactHtml, contactUrl)[0] ?? null
+        if (email) break
+      }
+    }
 
     // Phone — Dutch patterns
     const phoneMatch = searchableHtml.match(/\b(?:0\d{9}|\+31[\s\-]?\d{9}|0\d{2}[\s\-]\d{7}|0\d{3}[\s\-]\d{6})\b/)
@@ -904,6 +971,28 @@ async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {
   for (const lead of leads) {
     try {
       if (!lead.website_url) {
+        if (!lead.email) {
+          await supabase.from('leads').update({
+            status: 'disqualified',
+            crm_status: 'rejected',
+            sequence_stopped: true,
+            next_followup_at: null,
+            qualify_reason: 'Afgewezen: geen website en geen e-mailadres gevonden.',
+            lead_score: 0,
+            score_breakdown: {
+              website_exists: false,
+              email_found: false,
+              phone_found: false,
+              mobile_friendly: false,
+              has_cta: false,
+              outdated_feel: false,
+              internal_link_count: 0,
+            },
+            updated_at: new Date().toISOString(),
+          }).eq('id', lead.id)
+          log('Phase 2', `${lead.company_name} — DISQUALIFIED (geen website + geen e-mail)`)
+          continue
+        }
         await supabase.from('leads').update({
           status: 'qualified',
           qualify_reason: 'Geen website gevonden — handmatige review/e-mailverrijking nodig.',
