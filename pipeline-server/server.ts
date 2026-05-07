@@ -1833,11 +1833,9 @@ async function processReply(lead: any, rawReplyText: string, replyMessageId: str
     return
   }
 
-  // Reschedule followup for out-of-office (override the stop above)
+  // Out-of-office is also a reply for sequence purposes: do not send reminders.
   if (classification === 'out_of_office') {
-    const reschedule = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    await supabase.from('leads').update({ sequence_stopped: false, next_followup_at: reschedule }).eq('id', lead.id)
-    log('Reply', `${lead.company_name} afwezig — herinnering ingepland over 7 dagen`)
+    log('Reply', `${lead.company_name} afwezig — sequentie gestopt`)
     return
   }
 
