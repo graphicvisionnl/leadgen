@@ -373,6 +373,35 @@ function getFakeEmailReason(email: string | null | undefined): string | null {
   return null
 }
 
+function stripHtmlComments(html: string): string {
+  return html.replace(/<!--[\s\S]*?-->/g, ' ')
+}
+
+function getHostname(value: string | null | undefined): string {
+  if (!value) return ''
+  try {
+    return new URL(value).hostname.replace(/^www\./, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function getEmailDomain(email: string | null | undefined): string {
+  const normalized = normalizeRecipientEmail(email).toLowerCase()
+  return normalized.includes('@') ? normalized.split('@').pop()!.replace(/^www\./, '') : ''
+}
+
+function isLikelyAgencyCreditEmail(email: string | null | undefined, websiteUrl: string | null | undefined, html: string): boolean {
+  if (!email || !websiteUrl) return false
+  const emailDomain = getEmailDomain(email)
+  const websiteHost = getHostname(websiteUrl)
+  if (!emailDomain || !websiteHost || websiteHost.endsWith(emailDomain) || emailDomain.endsWith(websiteHost)) return false
+
+  const escapedEmail = normalizeRecipientEmail(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const creditPattern = new RegExp(`(?:made by|made with|built by|created by|developed by|website by|design by|powered by|ontwikkeld door|gemaakt door|website door)[\\s\\S]{0,300}${escapedEmail}|${escapedEmail}[\\s\\S]{0,300}(?:made by|made with|built by|created by|developed by|website by|design by|powered by|ontwikkeld door|gemaakt door|website door)`, 'i')
+  return creditPattern.test(html)
+}
+
 function normalizeRecipientEmail(email: string | null | undefined): string {
   const raw = (email ?? '').trim()
   try {
@@ -676,19 +705,21 @@ async function scrapeLeadSignals(url: string): Promise<LeadSignals> {
     })
     if (!res.ok) return empty
     const html = await res.text()
+    const searchableHtml = stripHtmlComments(html)
 
     // Email
-    const mailto = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
-    const emailsInPage = (html.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
+    const mailto = searchableHtml.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
+    const emailsInPage = (searchableHtml.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/g) ?? [])
       .filter(e => !e.includes('sentry') && !e.includes('example') && !e.includes('noreply') && !e.includes('@w3.org'))
-    const email = mailto?.[1]?.toLowerCase() ?? emailsInPage[0]?.toLowerCase() ?? null
+    const emailCandidates = [mailto?.[1], ...emailsInPage].filter(Boolean).map(e => e!.toLowerCase())
+    const email = emailCandidates.find(e => !isLikelyAgencyCreditEmail(e, url, html)) ?? null
 
     // Phone — Dutch patterns
-    const phoneMatch = html.match(/\b(?:0\d{9}|\+31[\s\-]?\d{9}|0\d{2}[\s\-]\d{7}|0\d{3}[\s\-]\d{6})\b/)
+    const phoneMatch = searchableHtml.match(/\b(?:0\d{9}|\+31[\s\-]?\d{9}|0\d{2}[\s\-]\d{7}|0\d{3}[\s\-]\d{6})\b/)
     const phone = phoneMatch ? phoneMatch[0].replace(/\s/g, '') : null
 
     // Social links from hrefs
-    const hrefs = (html.match(/href="([^"]+)"/gi) ?? []).map(m => m.slice(6, -1))
+    const hrefs = (searchableHtml.match(/href="([^"]+)"/gi) ?? []).map(m => m.slice(6, -1))
     const whatsapp_url = hrefs.find(h => /wa\.me|whatsapp\.com\/send/i.test(h)) ?? null
     const facebook_url = hrefs.find(h => /facebook\.com\//i.test(h)) ?? null
     const instagram_url = hrefs.find(h => /instagram\.com\//i.test(h)) ?? null
@@ -701,11 +732,11 @@ async function scrapeLeadSignals(url: string): Promise<LeadSignals> {
       : 0
 
     // CTA signals — Dutch keywords
-    const textLower = html.toLowerCase()
+    const textLower = searchableHtml.toLowerCase()
     const has_cta = /offerte|bel ons|contact|boek|afspraak|aanvragen|gratis|direct|nu bellen/.test(textLower)
 
     // Clean text for Claude
-    const text = html
+    const text = searchableHtml
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
       .replace(/<[^>]+>/g, ' ')
@@ -790,6 +821,8 @@ KWALIFICATIEREGELS — wees STRENG, standaard is qualified=false:
 Wij verkopen websiteverbeteringen. Stuur ALLEEN naar bedrijven die echt een verouderde, simpele of onduidelijke site hebben. Bedrijven met een al goede site hebben geen boodschap aan ons aanbod.
 
 qualified=false (DISQUALIFY) als ÉÉN van de volgende geldt:
+- Het bedrijf of de website hoort duidelijk NIET bij de gevraagde niche (${lead.niche}), bijvoorbeeld een webdesignbureau, marketingbureau, softwarebedrijf, platform of een totaal andere branche
+- De tekst is vooral een developer/agency credit, placeholder, "made by", "powered by" of lege React/Vite pagina zonder echte bedrijfscontent
 - De site oogt modern, clean en professioneel (strakke layout, witruimte, duidelijke typografie)
 - Professionele fotografie of hoogwaardige visuals zichtbaar in de tekst/opbouw
 - Duidelijke CTA's aanwezig boven de vouw (offerte knop, telefoonnummer prominent, chatwidget)
@@ -1534,6 +1567,14 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   const bodyKey = `email${emailNumber}_body` as const
   let body: string = lead[bodyKey] ?? lead.email_body ?? ''
   if (!body || !lead.email) throw new Error('Ontbrekende email data')
+  if (emailNumber > 1 && (lead.sequence_stopped || lead.reply_received_at || ['replied', 'interested', 'closed', 'rejected'].includes(lead.crm_status))) {
+    await supabase.from('leads').update({
+      sequence_stopped: true,
+      next_followup_at: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    throw new Error(`Follow-up geblokkeerd: lead heeft gereageerd of sequence is gestopt (${lead.company_name})`)
+  }
   const recipientEmail = normalizeRecipientEmail(lead.email)
   const fakeEmailReason = getFakeEmailReason(recipientEmail)
   if (fakeEmailReason) {
@@ -2497,6 +2538,15 @@ app.post('/check-replies', async (req, res) => {
   res.json({ success: true, message: 'IMAP check gestart' })
   checkReplies().catch(e => log('IMAP', `check-replies fout: ${e}`))
 })
+
+// Check inboxes regularly so replies stop reminder sequences automatically.
+setInterval(() => {
+  checkReplies().catch(e => log('IMAP', `Interval fout: ${e}`))
+}, 10 * 60 * 1000)
+
+setTimeout(() => {
+  checkReplies().catch(e => log('IMAP', `Startup check fout: ${e}`))
+}, 60 * 1000)
 
 // ─── Auto followup sender ─────────────────────────────────────────────────────
 
