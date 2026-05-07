@@ -1797,15 +1797,12 @@ async function processReply(lead: any, rawReplyText: string, replyMessageId: str
   const replyText = extractReplyText(rawReplyText)
   log('Reply', `Reactie van ${lead.company_name}: "${replyText.slice(0, 80)}…"`)
 
-  const { classification, summary } = await classifyReply(replyText, lead)
-  log('Reply', `Classificatie: ${classification} — ${summary}`)
-
-  // Always save the reply + stop auto-sequence (a human replied = no more auto-reminders)
+  // Stop immediately before any AI work. Classification/redesign can be slow,
+  // but reminders must never continue once a human reply is matched.
   await supabase.from('leads').update({
     reply_received_at: new Date().toISOString(),
     reply_text: replyText,
-    reply_classification: classification,
-    crm_status: classification === 'not_interested' ? 'rejected' : 'replied',
+    crm_status: 'replied',
     sequence_stopped: true,
     next_followup_at: null,
     ...(replyMessageId ? { reply_message_id: replyMessageId } : {}),
@@ -1817,6 +1814,18 @@ async function processReply(lead: any, rawReplyText: string, replyMessageId: str
   if (removedJobs > 0) {
     log('Reply', `${lead.company_name} — ${removedJobs} geplande e-mail(s) geannuleerd na reply`)
   }
+
+  const { classification, summary } = await classifyReply(replyText, lead)
+  log('Reply', `Classificatie: ${classification} — ${summary}`)
+
+  // Save classification. The auto-sequence was already stopped above.
+  await supabase.from('leads').update({
+    reply_classification: classification,
+    crm_status: classification === 'not_interested' ? 'rejected' : 'replied',
+    sequence_stopped: true,
+    next_followup_at: null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
 
   // Stop sequence on rejection
   if (classification === 'not_interested') {
@@ -2014,36 +2023,47 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
   return found
 }
 
+let replyCheckRunning = false
+
 async function checkReplies(): Promise<number> {
+  if (replyCheckRunning) {
+    log('IMAP', 'Check overgeslagen — vorige check loopt nog')
+    return 0
+  }
+  replyCheckRunning = true
   log('IMAP', 'Check gestart')
-  // Load all sending accounts from settings
-  const { data: settingsRows } = await supabase.from('settings').select('*')
-  const settings = Object.fromEntries(
-    (settingsRows ?? []).map((s: any) => [s.key, s.value])
-  )
+  try {
+    // Load all sending accounts from settings
+    const { data: settingsRows } = await supabase.from('settings').select('*')
+    const settings = Object.fromEntries(
+      (settingsRows ?? []).map((s: any) => [s.key, s.value])
+    )
 
-  let accounts: { email: string; pass: string }[] = []
-  try { accounts = JSON.parse(settings.smtp_accounts ?? '[]') } catch {}
+    let accounts: { email: string; pass: string }[] = []
+    try { accounts = JSON.parse(settings.smtp_accounts ?? '[]') } catch {}
 
-  // Always include the main env account if not already in the list
-  const mainUser = process.env.SMTP_USER!
-  if (mainUser && !accounts.find(a => a.email === mainUser)) {
-    accounts.push({ email: mainUser, pass: process.env.SMTP_PASS! })
-  }
-
-  let total = 0
-  for (const account of accounts) {
-    try {
-      const found = await checkInbox(account.email, account.pass)
-      total += found
-      log('IMAP', `${account.email}: ${found} reactie(s)`)
-    } catch (e) {
-      log('IMAP', `Fout bij ${account.email}: ${e}`)
+    // Always include the main env account if not already in the list
+    const mainUser = process.env.SMTP_USER!
+    if (mainUser && !accounts.find(a => a.email === mainUser)) {
+      accounts.push({ email: mainUser, pass: process.env.SMTP_PASS! })
     }
-  }
 
-  log('IMAP', `Check klaar — ${total} nieuwe reactie(s) in ${accounts.length} inbox(en)`)
-  return total
+    let total = 0
+    for (const account of accounts) {
+      try {
+        const found = await checkInbox(account.email, account.pass)
+        total += found
+        log('IMAP', `${account.email}: ${found} reactie(s)`)
+      } catch (e) {
+        log('IMAP', `Fout bij ${account.email}: ${e}`)
+      }
+    }
+
+    log('IMAP', `Check klaar — ${total} nieuwe reactie(s) in ${accounts.length} inbox(en)`)
+    return total
+  } finally {
+    replyCheckRunning = false
+  }
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
