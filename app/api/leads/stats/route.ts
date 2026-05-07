@@ -14,7 +14,7 @@ export async function GET() {
       .lte('next_followup_at', new Date().toISOString())
       .eq('sequence_stopped', false)
       .not('next_followup_at', 'is', null),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).not('reply_received_at', 'is', null),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).or('reply_received_at.not.is.null,crm_status.eq.replied,crm_status.eq.interested'),
   ])
 
   const leads = leadsRes.data ?? []

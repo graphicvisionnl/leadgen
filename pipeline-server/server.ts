@@ -1966,8 +1966,9 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
   try {
     const lock = await client.getMailboxLock('INBOX')
     try {
-      const uids = await client.search({ seen: false })
-      log('IMAP', `${imapUser}: ${Array.isArray(uids) ? uids.length : 0} ongelezen bericht(en)`)
+      const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+      const uids = await client.search({ since })
+      log('IMAP', `${imapUser}: ${Array.isArray(uids) ? uids.length : 0} recente bericht(en) sinds ${since.toISOString().slice(0, 10)}`)
       if (!uids || !Array.isArray(uids) || uids.length === 0) return 0
 
       for await (const msg of client.fetch(uids as number[], { envelope: true, bodyStructure: true, bodyParts: ['1', 'TEXT'] })) {
@@ -1981,15 +1982,18 @@ async function checkInbox(imapUser: string, imapPass: string): Promise<number> {
 
         log('IMAP', `${imapUser}: bericht van ${fromEmail} (subject: "${msg.envelope?.subject ?? ''}") — zoek naar lead`)
 
-        // Match to a lead by email address with open sequence
+        // Match to a lead by email address. Do not require status='sent':
+        // a lead can be redesigned/deployed after email 1, and still reply later.
         const { data: lead } = await supabase
           .from('leads')
           .select('*')
           .eq('email', fromEmail)
-          .eq('status', 'sent')
+          .not('email1_sent_at', 'is', null)
           .is('reply_received_at', null)
           .not('crm_status', 'in', '("rejected","replied","interested","closed")')
-          .single()
+          .order('email1_sent_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
 
         if (!lead) {
           log('IMAP', `${imapUser}: geen openstaande lead gevonden voor ${fromEmail} — overgeslagen`)

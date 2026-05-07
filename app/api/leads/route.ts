@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
         query = query.not('email1_sent_at', 'is', null)
         break
       case 'replied':
-        query = query.not('reply_received_at', 'is', null)
+        query = query.or('reply_received_at.not.is.null,crm_status.eq.replied,crm_status.eq.interested')
         break
       case 'closed':
         query = query.eq('crm_status', 'closed')
