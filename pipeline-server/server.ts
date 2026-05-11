@@ -59,6 +59,9 @@ async function callGemini(params: {
       if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`)
       const data = await res.json()
       if (data.code && data.code !== 200) {
+        if (data.code === 402 || /credit|balance|top up/i.test(JSON.stringify(data))) {
+          throw new Error(`KIE credits insufficient: ${JSON.stringify(data)}`)
+        }
         return await callClaudeFallback(params, `Gemini provider error: ${JSON.stringify(data)}`)
       }
       if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`)
@@ -66,6 +69,7 @@ async function callGemini(params: {
       if (!text) throw new Error(`Gemini: geen content in response`)
       return text
     } catch (e) {
+      if (/credits insufficient|balance|top up/i.test(String(e))) throw e
       if (String(e).includes('TimeoutError') || String(e).includes('aborted due to timeout')) {
         return await callClaudeFallback(params, formatError(e))
       }
@@ -123,6 +127,9 @@ async function callClaude(params: {
       if (!res.ok) throw new Error(`kie.ai ${res.status}: ${await res.text()}`)
       const data = await res.json()
       if (data.code && data.code !== 200) {
+        if (data.code === 402 || /credit|balance|top up/i.test(JSON.stringify(data))) {
+          throw new Error(`KIE credits insufficient: ${JSON.stringify(data)}`)
+        }
         const isServerError = data.code === 500 || data.code === 502 || data.code === 503
         if (isServerError && attempt < 3) {
           log('Retry', `callClaude attempt ${attempt} — kie.ai ${data.code} serverfout, wacht 30s`)
