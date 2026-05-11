@@ -831,6 +831,71 @@ interface ScoreBreakdown {
   internal_link_count: number
 }
 
+interface QualificationResult {
+  qualified: boolean
+  score: number
+  reason: string
+  mobile_friendly: boolean
+  has_cta: boolean
+  outdated_feel: boolean
+}
+
+function heuristicQualifyLead(lead: any, signals: LeadSignals, aiError: unknown): QualificationResult {
+  const text = (signals.text ?? '').toLowerCase()
+  const name = (lead.company_name ?? '').toLowerCase()
+  const combined = `${name} ${text}`
+  const reasonSuffix = `AI tijdelijk niet beschikbaar (${formatError(aiError).slice(0, 120)}).`
+
+  const wrongAudience = /\b(webdesign|webdesigner|web development|webdevelopment|marketingbureau|online marketing|seo bureau|reclamebureau|digital agency|software|uitzendbureau|vacature|jobs?|platform)\b/i.test(combined)
+  if (wrongAudience) {
+    return {
+      qualified: false,
+      score: 2,
+      reason: `Afgewezen via fallback: lijkt geen juiste doelgroep voor deze niche. ${reasonSuffix}`,
+      mobile_friendly: true,
+      has_cta: signals.has_cta,
+      outdated_feel: false,
+    }
+  }
+
+  if (!signals.text || signals.text.length < 120) {
+    return {
+      qualified: true,
+      score: 6,
+      reason: `Fallback: website bevat weinig of geen leesbare content; handmatige verbetering kan relevant zijn. ${reasonSuffix}`,
+      mobile_friendly: false,
+      has_cta: signals.has_cta,
+      outdated_feel: true,
+    }
+  }
+
+  const modernSignals = [
+    /award|prijs|gecertificeerd|erkend|keurmerk|iso\s?\d+/i.test(text),
+    /case|portfolio|projecten|blog|reviews|certific/i.test(text),
+    /offerte|contact|bel ons|afspraak|aanvragen|direct/i.test(text),
+    signals.internal_link_count >= 12,
+  ].filter(Boolean).length
+
+  const weakSignals = [
+    !signals.has_cta,
+    signals.internal_link_count <= 4,
+    signals.text.length < 900,
+    !signals.phone,
+  ].filter(Boolean).length
+
+  const qualified = weakSignals >= 2 || modernSignals < 2
+  return {
+    qualified,
+    score: qualified ? 6 : 4,
+    reason: qualified
+      ? `Fallback: website lijkt beperkt qua content/structuur of CTA, dus review blijft relevant. ${reasonSuffix}`
+      : `Afgewezen via fallback: website heeft genoeg moderne signalen/structuur. ${reasonSuffix}`,
+    mobile_friendly: modernSignals >= 2,
+    has_cta: signals.has_cta,
+    outdated_feel: qualified,
+  }
+}
+
 function calculateLeadScore(
   breakdown: ScoreBreakdown,
   opts?: { googleRating?: number | null; reviewCount?: number | null }
@@ -920,13 +985,19 @@ Bij twijfel: qualified=true. Liever te veel leads dan een scrape verspillen.
 VERPLICHT formaat — alleen dit JSON, niets anders:
 {"qualified":true,"score":7,"reason":"één zin in het Nederlands","mobile_friendly":false,"has_cta":false,"outdated_feel":true}`
 
-  const text = await callGemini({
-    max_tokens: 300,
-    messages: [{ role: 'user', content: prompt }],
-  })
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
-  const result = JSON.parse(jsonMatch[0])
+  let result: QualificationResult
+  try {
+    const text = await callGemini({
+      max_tokens: 300,
+      messages: [{ role: 'user', content: prompt }],
+    })
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
+    result = JSON.parse(jsonMatch[0])
+  } catch (e) {
+    result = heuristicQualifyLead(lead, signals, e)
+    log('Phase 2', `${lead.company_name} — AI fallback gebruikt: ${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'}`)
+  }
 
   // Build score breakdown
   const breakdown: ScoreBreakdown = {
