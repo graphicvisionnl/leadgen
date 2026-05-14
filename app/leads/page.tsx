@@ -18,6 +18,121 @@ const FILTER_TABS = [
   { value: 'rejected',      label: 'Afgewezen' },
 ] as const
 
+type ManualAddResult = {
+  lead?: Lead
+  email?: string | null
+  sent?: boolean
+  sendError?: string | null
+  existingLeadUpdated?: boolean
+  painpoint?: string
+  error?: string
+}
+
+function ManualLeadAdd({ onDone }: { onDone: () => void }) {
+  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [niche, setNiche] = useState('')
+  const [city, setCity] = useState('')
+  const [sendNow, setSendNow] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [result, setResult] = useState<ManualAddResult | null>(null)
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!websiteUrl.trim()) return
+
+    setIsSubmitting(true)
+    setResult(null)
+    try {
+      const res = await fetch('/api/leads/manual-add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          websiteUrl,
+          niche: niche.trim() || undefined,
+          city: city.trim() || undefined,
+          sendNow,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setResult({ error: data?.error ?? 'Lead kon niet worden toegevoegd' })
+        return
+      }
+      setResult(data)
+      setWebsiteUrl('')
+      onDone()
+    } catch (error) {
+      setResult({ error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-surface border border-subtle rounded-lg p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm font-medium text-white/75">Handmatig lead toevoegen</p>
+          <p className="text-xs text-white/35 mt-0.5">Website invullen, e-mail zoeken, sequence maken en direct versturen.</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-white/55 select-none">
+          <input
+            type="checkbox"
+            checked={sendNow}
+            onChange={e => setSendNow(e.target.checked)}
+            className="h-4 w-4 rounded border-white/20 bg-black/30 accent-brand"
+          />
+          Direct versturen
+        </label>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_160px_160px_auto]">
+        <input
+          type="url"
+          value={websiteUrl}
+          onChange={e => setWebsiteUrl(e.target.value)}
+          placeholder="https://voorbeeld.nl"
+          required
+          className="bg-black/20 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+        />
+        <input
+          type="text"
+          value={niche}
+          onChange={e => setNiche(e.target.value)}
+          placeholder="Niche"
+          className="bg-black/20 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+        />
+        <input
+          type="text"
+          value={city}
+          onChange={e => setCity(e.target.value)}
+          placeholder="Stad"
+          className="bg-black/20 border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20"
+        />
+        <button
+          type="submit"
+          disabled={isSubmitting || !websiteUrl.trim()}
+          className="px-4 py-2 rounded-lg text-sm bg-brand text-white hover:bg-brand/90 disabled:opacity-45 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+        >
+          {isSubmitting ? 'Bezig...' : 'Toevoegen'}
+        </button>
+      </div>
+
+      {result?.error && (
+        <p className="text-sm text-red-400">{result.error}</p>
+      )}
+      {result?.lead && (
+        <div className="text-sm text-white/55">
+          <span className="text-white/75">{result.lead.company_name ?? 'Lead'}</span>
+          {' '}is {result.existingLeadUpdated ? 'bijgewerkt' : 'toegevoegd'}.
+          {' '}E-mail: <span className={result.email ? 'text-green-400' : 'text-yellow-400'}>{result.email ?? 'niet gevonden'}</span>.
+          {' '}Status: <span className={result.sent ? 'text-green-400' : 'text-yellow-400'}>{result.sent ? 'verzonden' : (result.sendError ?? 'niet verzonden')}</span>.
+        </div>
+      )}
+    </form>
+  )
+}
+
 function LeadsPageContent() {
   const searchParams = useSearchParams()
   const initialFilter = searchParams.get('filter') ?? ''
@@ -85,6 +200,8 @@ function LeadsPageContent() {
           className="bg-surface border border-subtle rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-white/20 w-64"
         />
       </div>
+
+      <ManualLeadAdd onDone={() => fetchLeads(filter, search, page)} />
 
       {/* Filter tabs */}
       <div className="flex items-center gap-1 overflow-x-auto pb-1">
