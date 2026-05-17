@@ -116,6 +116,24 @@ async function scrapeEmailFromWebsite(url: string): Promise<string | null> {
   }
 }
 
+function detectWrongAudienceLead(lead: any): string | null {
+  const value = `${lead.company_name ?? ''} ${lead.website_url ?? ''}`
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+  const rules: Array<[RegExp, string]> = [
+    [/\b(webdesign|webdesigner|webdevelopment|web-development|webbouwer|websitebouwer)\b/, 'webdesign/webdevelopment'],
+    [/\b(digital agency|internetbureau|marketingbureau|online marketing bureau|seo bureau|sea bureau)\b/, 'marketing/digital agency'],
+    [/\b(softwarebedrijf|software company|app development|app-development|saas)\b/, 'software/app development'],
+    [/\b(reclamebureau|branding agency|creative agency)\b/, 'reclame/branding agency'],
+    [/\b(uitzendbureau|recruitment|vacature|vacatures|jobs)\b/, 'jobs/recruitment'],
+    [/\b(werkspot|zoofy|trustoo|homedeal)\b/, 'platform/lead marketplace'],
+  ]
+
+  return rules.find(([regex]) => regex.test(value))?.[1] ?? null
+}
+
 // Process a batch of scraped leads: email scrape (if needed) → permissive code-only qualify
 export async function qualifyBatch(batchSize: number = 3): Promise<{
   processed: number
@@ -141,6 +159,20 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
     console.log(`[Phase 2] Processing lead: ${lead.company_name} (${lead.website_url})`)
 
     try {
+      const wrongAudienceReason = detectWrongAudienceLead(lead)
+      if (wrongAudienceReason) {
+        await supabase.from('leads').update({
+          status: 'disqualified',
+          crm_status: 'rejected',
+          sequence_stopped: true,
+          next_followup_at: null,
+          qualify_reason: `Afgewezen via lichte blacklist: ${wrongAudienceReason} gevonden in bedrijfsnaam of URL.`,
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
+        disqualified++
+        continue
+      }
+
       if (!lead.website_url && !lead.email) {
         await supabase.from('leads').update({
           status: 'disqualified',

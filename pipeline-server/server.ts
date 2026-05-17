@@ -440,11 +440,32 @@ function websitePainpointLine(lead: any, fallback: string): string {
     : ''
 
   if (!reason) return fallback
+  if (/^(Code kwalificatie|Herbeoordeeld|Handmatig toegevoegd|Geen website gevonden|Afgewezen:)/i.test(reason)) {
+    return fallback
+  }
 
   return reason
     .replace(/\.$/, '')
     .replace(/^De website tekst is /i, 'De website komt over als ')
     .replace(/^De site /i, 'De site ')
+}
+
+function detectWrongAudienceLead(lead: any): string | null {
+  const value = `${lead.company_name ?? ''} ${lead.website_url ?? ''}`
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+  const rules: Array<[RegExp, string]> = [
+    [/\b(webdesign|webdesigner|webdevelopment|web-development|webbouwer|websitebouwer)\b/, 'webdesign/webdevelopment'],
+    [/\b(digital agency|internetbureau|marketingbureau|online marketing bureau|seo bureau|sea bureau)\b/, 'marketing/digital agency'],
+    [/\b(softwarebedrijf|software company|app development|app-development|saas)\b/, 'software/app development'],
+    [/\b(reclamebureau|branding agency|creative agency)\b/, 'reclame/branding agency'],
+    [/\b(uitzendbureau|recruitment|vacature|vacatures|jobs)\b/, 'jobs/recruitment'],
+    [/\b(werkspot|zoofy|trustoo|homedeal)\b/, 'platform/lead marketplace'],
+  ]
+
+  return rules.find(([regex]) => regex.test(value))?.[1] ?? null
 }
 
 function buildRedesignEmailBody(lead: any, painpoint: string): string {
@@ -933,6 +954,20 @@ function calculateLeadScore(
 async function phase2SingleLead(lead: any): Promise<boolean> {
   log('Phase 2', lead.company_name)
 
+  const wrongAudienceReason = detectWrongAudienceLead(lead)
+  if (wrongAudienceReason) {
+    await supabase.from('leads').update({
+      status: 'disqualified',
+      crm_status: 'rejected',
+      sequence_stopped: true,
+      next_followup_at: null,
+      qualify_reason: `Afgewezen via lichte blacklist: ${wrongAudienceReason} gevonden in bedrijfsnaam of URL.`,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    log('Phase 2', `${lead.company_name} — DISQUALIFIED (lichte blacklist: ${wrongAudienceReason})`)
+    return false
+  }
+
   const signals = await scrapeLeadSignals(lead.website_url)
   let email = lead.email ?? signals.email
   if (signals.email && !lead.email) {
@@ -997,6 +1032,19 @@ async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {
   let qualified = 0
   for (const lead of leads) {
     try {
+      const wrongAudienceReason = detectWrongAudienceLead(lead)
+      if (wrongAudienceReason) {
+        await supabase.from('leads').update({
+          status: 'disqualified',
+          crm_status: 'rejected',
+          sequence_stopped: true,
+          next_followup_at: null,
+          qualify_reason: `Afgewezen via lichte blacklist: ${wrongAudienceReason} gevonden in bedrijfsnaam of URL.`,
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
+        log('Phase 2', `${lead.company_name} — DISQUALIFIED (lichte blacklist: ${wrongAudienceReason})`)
+        continue
+      }
       if (!lead.website_url) {
         if (!lead.email) {
           await supabase.from('leads').update({
@@ -1509,57 +1557,34 @@ async function generateEmailSequenceForLead(lead: any) {
       ? namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase()
       : null
   })()
-  const greeting = firstName ? `Hey ${firstName},` : 'Hey,'
+  const greeting = firstName ? `Goedemiddag ${firstName},` : 'Goedemiddag,'
   const email1 = generateEmail1ForSegment(lead)
   log('Mail', `Lead ${lead.id} — Email 1 generated using segment: ${email1.segment} — template: ${email1.template}`)
 
-  const prompt = `Je schrijft alleen de opvolgmails voor een koude outreach reeks namens Graphic Vision.
+  const emails = {
+    email1: { subject: email1.subject, body: email1.body },
+    email2: { subject: 'Reactie', body: '[Wordt gegenereerd na reactie van de lead]' },
+    email3: {
+      subject: `Re: ${email1.subject}`,
+      body: `${greeting}
 
-Bedrijf: ${lead.company_name}
-Niche: ${lead.niche}
-Stad: ${lead.city ?? 'onbekend'}
+Kleine follow-up op mijn vorige mail.
 
-OPMAAK (verplicht voor alle mails): gebruik lege regels tussen alinea's. Plain text stijl.
+Ik heb het gratis redesign/concept voor jullie website nog klaarstaan. Zal ik het even toesturen?
 
-MAIL 1 — AL GEGENEREERD
-Gebruik exact deze subject en body:
-subject="${email1.subject}"
-body=${JSON.stringify(email1.body)}
+– Graphic Vision`,
+    },
+    email4: {
+      subject: `Re: ${email1.subject}`,
+      body: `${greeting}
 
-BELANGRIJK VOOR DE HELE REEKS:
-- Graphic Vision verkoopt geen algemeen advies, maar een concreet gratis redesign/concept.
-- Verwijs in follow-ups terug naar dat gratis redesign/concept.
-- Houd de toon kort, direct en menselijk.
+Ik sluit het gratis concept voor jullie af.
 
-MAIL 2 — REACTIE MAIL (placeholder, wordt gegenereerd na reactie)
-Schrijf alleen: subject="Reactie", body="[Wordt gegenereerd na reactie van de lead]"
+Mocht het later alsnog handig zijn om te zien hoe jullie website duidelijker en sterker kan overkomen, dan hoor ik het graag.
 
-MAIL 3 — HERINNERING 1 (dag 3)
-- Begin met "${greeting}"
-- Super kort — max 2-3 zinnen
-- Verwijs terug naar het gratis redesign/concept uit mail 1, vraag of ze het willen zien
-- GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Graphic Vision"
-
-MAIL 4 — HERINNERING 2 (dag 6)
-- Begin met "${greeting}"
-- Sluit het dossier af — "Ik sluit het gratis concept voor jullie" — kort en vriendelijk
-- GEEN links, GEEN preview URL
-- Afsluiting EXACT: "– Graphic Vision"
-
-Geef ALLEEN dit JSON terug, niets anders:
-{
-  "email1": {"subject": ${JSON.stringify(email1.subject)}, "body": ${JSON.stringify(email1.body)}},
-  "email2": {"subject": "Reactie", "body": "[Wordt gegenereerd na reactie van de lead]"},
-  "email3": {"subject": "...", "body": "..."},
-  "email4": {"subject": "...", "body": "..."}
-}`
-
-  const seqText = await callGemini({ max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
-  const jsonMatch = seqText.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('Geen JSON in sequence response')
-  const emails = JSON.parse(jsonMatch[0])
-  emails.email1 = { subject: email1.subject, body: email1.body }
+– Graphic Vision`,
+    },
+  }
 
   // Randomly assign variant type 50/50 if not already set.
   // Screenshot variant is only used when we can point at a concrete visible issue.
