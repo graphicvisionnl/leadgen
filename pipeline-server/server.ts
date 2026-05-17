@@ -934,76 +934,19 @@ async function phase2SingleLead(lead: any): Promise<boolean> {
   log('Phase 2', lead.company_name)
 
   const signals = await scrapeLeadSignals(lead.website_url)
-  const email = lead.email ?? signals.email
+  let email = lead.email ?? signals.email
   if (signals.email && !lead.email) {
     await supabase.from('leads').update({ email: signals.email }).eq('id', lead.id)
   }
 
   const fakeEmailReason = getFakeEmailReason(email)
   if (fakeEmailReason) {
-    log('Phase 2', `${lead.company_name} — fake e-mail gedetecteerd: ${fakeEmailReason}`)
+    log('Phase 2', `${lead.company_name} — fake e-mail genegeerd: ${fakeEmailReason}`)
+    email = null
     await supabase.from('leads').update({
-      email,
-      status: 'error',
-      qualify_reason: `Fake e-mail gedetecteerd: ${fakeEmailReason}`,
+      email: null,
       updated_at: new Date().toISOString(),
     }).eq('id', lead.id)
-    return false
-  }
-
-  const prompt = `Je bent een webdesign bureau dat beoordeelt of een bedrijf baat zou hebben bij een nieuwe website.
-Je hebt GEEN internet toegang. De website tekst hieronder is al voor jou opgehaald. Bezoek de URL NIET.
-
-BEDRIJF: ${lead.company_name} (${lead.niche}, ${lead.city})
-GOOGLE RATING: ${lead.google_rating ?? 'onbekend'}/5 (${lead.review_count ?? 0} reviews)
-
-OPGEHAALDE WEBSITE TEKST:
-${signals.text || '(website niet bereikbaar — geen tekst beschikbaar)'}
-
-KWALIFICATIEREGELS — wees STRENG, standaard is qualified=false:
-Wij verkopen websiteverbeteringen. Stuur ALLEEN naar bedrijven die echt een verouderde, simpele of onduidelijke site hebben. Bedrijven met een al goede site hebben geen boodschap aan ons aanbod.
-
-qualified=false (DISQUALIFY) als ÉÉN van de volgende geldt:
-- Het bedrijf of de website hoort duidelijk NIET bij de gevraagde niche (${lead.niche}), bijvoorbeeld een webdesignbureau, marketingbureau, softwarebedrijf, platform of een totaal andere branche
-- De tekst is vooral een developer/agency credit, placeholder, "made by", "powered by" of lege React/Vite pagina zonder echte bedrijfscontent
-- De site oogt modern, clean en professioneel (strakke layout, witruimte, duidelijke typografie)
-- Professionele fotografie of hoogwaardige visuals zichtbaar in de tekst/opbouw
-- Duidelijke CTA's aanwezig boven de vouw (offerte knop, telefoonnummer prominent, chatwidget)
-- Goede mobiele versie (hints: "responsive", viewport meta, flexibele layout-taal)
-- Keurmerken, prijzen, certificaten of awards vermeld (bijv. "beste loodgieter", "award", "gecertificeerd", "erkend", keurmerk logo's)
-- Meerdere pagina's met duidelijke structuur (diensten, over ons, projecten, blog, cases)
-- Copyright jaar 2022 of later, of tekst die wijst op recent bouwen
-- Grote, bekende of landelijk opererende spelers (franchises, ketens, platforms zoals zoofy.nl, werkspot.nl)
-- Site lijkt gebouwd door een professioneel bureau (veel features, gelikte copy, duidelijke branding)
-
-qualified=true (KWALIFICEER) ALLEEN als:
-- De site oogt duidelijk verouderd, amateuristisch of rommelig
-- Weinig of geen duidelijke CTA's — bezoeker weet niet wat te doen
-- Slechte of ontbrekende mobiele versie
-- Dunne content: nauwelijks tekst, weinig pagina's, geen structuur
-- Geen tekst beschikbaar (website niet bereikbaar / 404): qualified=true — we weten het niet
-
-Bij twijfel: qualified=true. Liever te veel leads dan een scrape verspillen.
-
-- mobile_friendly: schat in of de tekst hints geeft op een moderne responsieve site
-- has_cta: is er een duidelijke CTA aanwezig (offerte, bel, contact, boek, etc.)?
-- outdated_feel: ziet de site er verouderd/amateuristisch uit?
-
-VERPLICHT formaat — alleen dit JSON, niets anders:
-{"qualified":true,"score":7,"reason":"één zin in het Nederlands","mobile_friendly":false,"has_cta":false,"outdated_feel":true}`
-
-  let result: QualificationResult
-  try {
-    const text = await callGemini({
-      max_tokens: 300,
-      messages: [{ role: 'user', content: prompt }],
-    })
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error(`Geen JSON in response: ${text.slice(0, 200)}`)
-    result = JSON.parse(jsonMatch[0])
-  } catch (e) {
-    result = heuristicQualifyLead(lead, signals, e)
-    log('Phase 2', `${lead.company_name} — AI fallback gebruikt: ${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'}`)
   }
 
   // Build score breakdown
@@ -1011,9 +954,9 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
     website_exists: signals.text.length > 50,
     email_found: !!email,
     phone_found: !!signals.phone,
-    mobile_friendly: result.mobile_friendly ?? true,
-    has_cta: result.has_cta ?? signals.has_cta,
-    outdated_feel: result.outdated_feel ?? false,
+    mobile_friendly: true,
+    has_cta: signals.has_cta,
+    outdated_feel: !signals.has_cta || signals.internal_link_count <= 4 || signals.text.length < 900,
     internal_link_count: signals.internal_link_count,
   }
   const { score: leadScore, hot_lead } = calculateLeadScore(breakdown, {
@@ -1022,8 +965,10 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
   })
 
   await supabase.from('leads').update({
-    status: result.qualified ? 'qualified' : 'disqualified',
-    qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
+    status: 'qualified',
+    qualify_reason: fakeEmailReason
+      ? `Code kwalificatie: goedgekeurd omdat er een website is. Fake e-mail genegeerd: ${fakeEmailReason}.`
+      : 'Code kwalificatie: goedgekeurd omdat er een website of e-mailadres beschikbaar is.',
     email,
     phone: signals.phone,
     whatsapp_url: signals.whatsapp_url,
@@ -1035,8 +980,8 @@ VERPLICHT formaat — alleen dit JSON, niets anders:
     updated_at: new Date().toISOString(),
   }).eq('id', lead.id)
 
-  log('Phase 2', `${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (${result.score}/10) lead_score=${leadScore}${hot_lead ? ' 🔥HOT' : ''}`)
-  return result.qualified
+  log('Phase 2', `QUALIFIED (code-only permissief) lead_score=${leadScore}${hot_lead ? ' 🔥HOT' : ''}`)
+  return true
 }
 
 async function phase2(runId: string, opts: { onlyRunId?: boolean } = {}) {

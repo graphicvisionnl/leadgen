@@ -1,6 +1,5 @@
 import { createServerSupabaseClient } from '@/lib/supabase'
 import { uploadScreenshot } from '@/lib/supabase-storage'
-import { qualifyWebsite } from '@/lib/claude'
 
 // Take a screenshot of a URL using @sparticuz/chromium + puppeteer-core
 // Falls back to ScreenshotOne API if Chromium fails
@@ -117,7 +116,7 @@ async function scrapeEmailFromWebsite(url: string): Promise<string | null> {
   }
 }
 
-// Process a batch of scraped leads: email scrape (if needed) → screenshot → Claude qualify
+// Process a batch of scraped leads: email scrape (if needed) → permissive code-only qualify
 export async function qualifyBatch(batchSize: number = 3): Promise<{
   processed: number
   qualified: number
@@ -130,8 +129,7 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
   const { data: leads } = await supabase
     .from('leads')
     .select('*')
-    .in('status', ['scraped', 'no_email'])
-    .not('website_url', 'is', null)
+    .in('status', ['scraped', 'no_email', 'error'])
     .limit(batchSize)
 
   if (!leads?.length) return { processed: 0, qualified: 0, disqualified: 0 }
@@ -143,6 +141,29 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
     console.log(`[Phase 2] Processing lead: ${lead.company_name} (${lead.website_url})`)
 
     try {
+      if (!lead.website_url && !lead.email) {
+        await supabase.from('leads').update({
+          status: 'disqualified',
+          crm_status: 'rejected',
+          sequence_stopped: true,
+          next_followup_at: null,
+          qualify_reason: 'Afgewezen: geen website en geen e-mailadres gevonden.',
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
+        disqualified++
+        continue
+      }
+
+      if (!lead.website_url) {
+        await supabase.from('leads').update({
+          status: 'qualified',
+          qualify_reason: 'Code kwalificatie: goedgekeurd omdat er een e-mailadres beschikbaar is.',
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
+        qualified++
+        continue
+      }
+
       // For no_email leads: try to scrape an email from their website first
       let email = lead.email
       if (!email) {
@@ -151,11 +172,6 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
         if (email) {
           console.log(`[Phase 2] Found email: ${email}`)
           await supabase.from('leads').update({ email }).eq('id', lead.id)
-        } else {
-          console.log(`[Phase 2] No email found for ${lead.company_name}, skipping`)
-          await supabase.from('leads').update({ status: 'disqualified', qualify_reason: 'Geen e-mailadres gevonden' }).eq('id', lead.id)
-          disqualified++
-          continue
         }
       }
 
@@ -169,26 +185,20 @@ export async function qualifyBatch(batchSize: number = 3): Promise<{
       const filename = `${lead.id}-${Date.now()}.jpg`
       const screenshotUrl2 = await uploadScreenshot(screenshotBuffer, filename, 'screenshots')
 
-      // Send to Claude for qualification
-      const base64 = screenshotBuffer.toString('base64')
-      const result = await qualifyWebsite(base64, lead.company_name!, lead.niche!)
-
       // Update lead status
       await supabase
         .from('leads')
         .update({
           screenshot_url: screenshotUrl2,
-          status: result.qualified ? 'qualified' : 'disqualified',
-          qualify_reason: `Score: ${result.score}/10 — ${result.reason}`,
+          status: 'qualified',
+          qualify_reason: 'Code kwalificatie: goedgekeurd omdat er een website of e-mailadres beschikbaar is.',
           updated_at: new Date().toISOString(),
         })
         .eq('id', lead.id)
 
-      console.log(
-        `[Phase 2] ${lead.company_name}: ${result.qualified ? 'QUALIFIED' : 'DISQUALIFIED'} (score ${result.score})`
-      )
+      console.log(`[Phase 2] ${lead.company_name}: QUALIFIED (code-only permissief)`)
 
-      result.qualified ? qualified++ : disqualified++
+      qualified++
     } catch (err) {
       console.error(`[Phase 2] Failed for ${lead.company_name}:`, err)
       await supabase
