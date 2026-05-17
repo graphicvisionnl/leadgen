@@ -440,7 +440,7 @@ function websitePainpointLine(lead: any, fallback: string): string {
     : ''
 
   if (!reason) return fallback
-  if (/^(Code kwalificatie|Herbeoordeeld|Handmatig toegevoegd|Geen website gevonden|Afgewezen:)/i.test(reason)) {
+  if (isUnsafePainpointText(reason)) {
     return fallback
   }
 
@@ -448,6 +448,83 @@ function websitePainpointLine(lead: any, fallback: string): string {
     .replace(/\.$/, '')
     .replace(/^De website tekst is /i, 'De website komt over als ')
     .replace(/^De site /i, 'De site ')
+}
+
+function isUnsafePainpointText(value: string | null | undefined): boolean {
+  const text = (value ?? '').trim()
+  if (!text) return true
+  return /^(Code kwalificatie|Herbeoordeeld|Handmatig toegevoegd|Geen website gevonden|Afgewezen:|Mailgeneratie waarschuwing:)/i.test(text) ||
+    /\b(KIE|Gemini|Claude|AI tijdelijk|credits|insufficient|balance|provider|fallback|error|exception|JSON|response|timeout|api|402|500)\b/i.test(text)
+}
+
+function isUnsafeEmailText(value: string | null | undefined): boolean {
+  return isUnsafePainpointText(value)
+}
+
+function cleanPainpointText(value: string): string {
+  return value
+    .replace(/^Wat me opviel:\s*/i, '')
+    .replace(/^[-•\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\.$/, '')
+    .trim()
+}
+
+function defaultWebsitePainpoint(lead: any): string {
+  if (!lead.website_url) {
+    return 'er lijkt nog geen sterke eigen website te staan, terwijl mensen via Google wel snel willen zien of ze jullie kunnen vertrouwen'
+  }
+  return 'de website stuurt bezoekers niet duidelijk genoeg naar een volgende stap, waardoor aanvragen kunnen afhaken'
+}
+
+async function generateWebsitePainpointForLead(lead: any): Promise<{ painpoint: string; warning: string | null }> {
+  const fallback = websitePainpointLine(lead, defaultWebsitePainpoint(lead))
+  if (!lead.website_url) return { painpoint: fallback, warning: null }
+
+  const signals = await scrapeLeadSignals(lead.website_url)
+  if (!signals.text || signals.text.length < 120) {
+    return {
+      painpoint: 'de website lijkt momenteel niet goed bereikbaar of bevat weinig leesbare informatie, waardoor bezoekers minder snel vertrouwen krijgen',
+      warning: null,
+    }
+  }
+
+  try {
+    const prompt = `Je beoordeelt kort een website voor een Nederlandse koude outreach mail.
+
+Bedrijf: ${lead.company_name ?? 'onbekend'}
+Niche: ${lead.niche ?? 'onbekend'}
+Stad: ${lead.city ?? 'onbekend'}
+Website: ${lead.website_url}
+
+WEBSITE TEKST:
+${signals.text.slice(0, 3500)}
+
+Geef precies 1 korte Nederlandse zin met een concreet verbeterpunt voor de website.
+Regels:
+- Geen begroeting.
+- Geen technische termen.
+- Geen verwijzing naar AI, model, scraping, errors of onbereikbaarheid tenzij de site echt weinig tekst had.
+- Klink alsof een mens dit zag.
+- Maximaal 24 woorden.
+- Begin niet met "Wat me opviel".
+
+Voorbeelden:
+"de website kan bezoekers duidelijker sturen naar contact of offerte aanvragen"
+"er wordt nog weinig vertrouwen opgebouwd met projecten, reviews of garanties"
+"de belangrijkste diensten staan niet direct duidelijk genoeg in beeld"`
+
+    const text = cleanPainpointText(await callGemini({ max_tokens: 80, messages: [{ role: 'user', content: prompt }] }))
+    if (isUnsafePainpointText(text) || text.length < 12) throw new Error(`Ongeldige painpoint response: ${text}`)
+    return { painpoint: text.slice(0, 220), warning: null }
+  } catch (e) {
+    const warning = `Mailgeneratie waarschuwing: LLM painpoint mislukt; veilige fallback gebruikt. Details: ${formatError(e).slice(0, 220)}`
+    await supabase.from('leads').update({
+      qualify_reason: warning,
+      updated_at: new Date().toISOString(),
+    }).eq('id', lead.id)
+    return { painpoint: fallback, warning }
+  }
 }
 
 function detectWrongAudienceLead(lead: any): string | null {
@@ -483,7 +560,7 @@ Zijn jullie geïnteresseerd om deze te zien?
 – Graphic Vision`
 }
 
-function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
+function generateEmail1ForSegment(lead: any, painpointOverride?: string): SegmentEmailTemplate {
   const segment = normalizeLeadSegment(lead.segment)
 
   const templates: Record<LeadSegment, Omit<SegmentEmailTemplate, 'segment'>> = {
@@ -492,7 +569,7 @@ function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
       subject: 'Snelle vraag over jullie website',
       body: buildRedesignEmailBody(
         lead,
-        websitePainpointLine(lead, 'de website stuurt bezoekers niet duidelijk genoeg naar een volgende stap, waardoor aanvragen kunnen afhaken')
+        painpointOverride ?? websitePainpointLine(lead, 'de website stuurt bezoekers niet duidelijk genoeg naar een volgende stap, waardoor aanvragen kunnen afhaken')
       ),
     },
     no_website: {
@@ -500,7 +577,7 @@ function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
       subject: 'Snelle vraag',
       body: buildRedesignEmailBody(
         lead,
-        websitePainpointLine(lead, 'er lijkt nog geen sterke eigen website te staan, terwijl mensen via Google wel snel willen zien of ze jullie kunnen vertrouwen')
+        painpointOverride ?? websitePainpointLine(lead, 'er lijkt nog geen sterke eigen website te staan, terwijl mensen via Google wel snel willen zien of ze jullie kunnen vertrouwen')
       ),
     },
     low_reviews: {
@@ -508,7 +585,7 @@ function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
       subject: 'Korte vraag',
       body: buildRedesignEmailBody(
         lead,
-        websitePainpointLine(lead, 'er is online nog weinig vertrouwen zichtbaar, waardoor de website extra duidelijk moet uitleggen waarom klanten voor jullie kiezen')
+        painpointOverride ?? websitePainpointLine(lead, 'er is online nog weinig vertrouwen zichtbaar, waardoor de website extra duidelijk moet uitleggen waarom klanten voor jullie kiezen')
       ),
     },
     high_reviews: {
@@ -516,7 +593,7 @@ function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
       subject: 'Snelle vraag over jullie site',
       body: buildRedesignEmailBody(
         lead,
-        websitePainpointLine(lead, 'jullie hebben al reviews, maar de website kan die betrouwbaarheid sterker gebruiken om meer aanvragen binnen te halen')
+        painpointOverride ?? websitePainpointLine(lead, 'jullie hebben al reviews, maar de website kan die betrouwbaarheid sterker gebruiken om meer aanvragen binnen te halen')
       ),
     },
     high_rating: {
@@ -524,7 +601,7 @@ function generateEmail1ForSegment(lead: any): SegmentEmailTemplate {
       subject: 'Korte vraag',
       body: buildRedesignEmailBody(
         lead,
-        websitePainpointLine(lead, 'jullie komen goed over, maar de website kan bezoekers nog duidelijker sturen naar contact of aanvraag')
+        painpointOverride ?? websitePainpointLine(lead, 'jullie komen goed over, maar de website kan bezoekers nog duidelijker sturen naar contact of aanvraag')
       ),
     },
   }
@@ -1558,7 +1635,8 @@ async function generateEmailSequenceForLead(lead: any) {
       : null
   })()
   const greeting = firstName ? `Goedemiddag ${firstName},` : 'Goedemiddag,'
-  const email1 = generateEmail1ForSegment(lead)
+  const painpointResult = await generateWebsitePainpointForLead(lead)
+  const email1 = generateEmail1ForSegment(lead, painpointResult.painpoint)
   log('Mail', `Lead ${lead.id} — Email 1 generated using segment: ${email1.segment} — template: ${email1.template}`)
 
   const emails = {
@@ -1609,7 +1687,7 @@ Mocht het later alsnog handig zijn om te zien hoe jullie website duidelijker en 
 
   await supabase.from('leads').update(updatePayload).eq('id', lead.id)
 
-  return emails
+  return { ...emails, painpoint_warning: painpointResult.warning }
 }
 
 // Reusable: send a specific email number (1–4) for a lead
@@ -1708,6 +1786,16 @@ async function sendEmailForLead(lead: any, emailNumber: EmailNumber) {
   const bodyKey = `email${emailNumber}_body` as const
   let body: string = lead[bodyKey] ?? lead.email_body ?? ''
   if (!body || !lead.email) throw new Error('Ontbrekende email data')
+  if (isUnsafeEmailText(body)) {
+    const clearPayload: Record<string, any> = {
+      qualify_reason: 'E-mail verzenden geblokkeerd: mailtekst bevat technische foutmelding. Genereer de e-mail opnieuw.',
+      updated_at: new Date().toISOString(),
+    }
+    clearPayload[bodyKey] = null
+    if (emailNumber === 1) clearPayload.email_body = null
+    await supabase.from('leads').update(clearPayload).eq('id', lead.id)
+    throw new Error(`E-mail verzenden geblokkeerd voor ${lead.company_name}: mailtekst bevat technische foutmelding`)
+  }
   if (emailNumber > 1 && (lead.sequence_stopped || lead.reply_received_at || ['replied', 'interested', 'closed', 'rejected'].includes(lead.crm_status))) {
     await supabase.from('leads').update({
       sequence_stopped: true,
@@ -2405,7 +2493,7 @@ app.post('/generate-email-sequence/:id', async (req, res) => {
   try {
     const emails = await generateEmailSequenceForLead(lead)
     log('Mail', `Sequentie gegenereerd voor ${lead.company_name}`)
-    res.json({ success: true, emails })
+    res.json({ success: true, emails, warning: emails.painpoint_warning ?? null })
   } catch (e) {
     log('Mail', `Sequentie genereren mislukt: ${e}`)
     res.status(500).json({ error: String(e) })

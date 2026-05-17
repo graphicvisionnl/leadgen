@@ -228,6 +228,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   const [generatingSequence, setGeneratingSequence] = useState(false)
   const [generatingVariants, setGeneratingVariants] = useState(false)
   const [sequenceError, setSequenceError] = useState('')
+  const [sequenceNotice, setSequenceNotice] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [sendSuccess, setSendSuccess] = useState('')
@@ -284,6 +285,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   async function generateSequence() {
     setGeneratingSequence(true)
     setSequenceError('')
+    setSequenceNotice('')
     try {
       const res = await fetch(`/api/leads/${lead.id}/generate-email-sequence`, { method: 'POST' })
       const data = await res.json()
@@ -296,6 +298,10 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
           email4_subject: e.email4.subject, email4_body: e.email4.body,
         })
         setActiveEmailTab(0)
+        if (data.warning) {
+          setSequenceNotice(data.warning)
+          setLead(l => ({ ...l, qualify_reason: data.warning }))
+        }
       } else {
         setSequenceError(data.error ?? 'Genereren mislukt')
       }
@@ -307,6 +313,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
   async function generateVariants() {
     setGeneratingVariants(true)
     setSequenceError('')
+    setSequenceNotice('')
     try {
       const res = await fetch(`/api/leads/${lead.id}/generate-email-variants`, { method: 'POST' })
       const data = await res.json()
@@ -685,6 +692,7 @@ export function LeadDetail({ lead: initialLead }: LeadDetailProps) {
         </div>
 
         {sequenceError && <p className="text-red-400 text-xs">{sequenceError}</p>}
+        {sequenceNotice && <p className="text-yellow-400 text-xs">{sequenceNotice}</p>}
 
         {missingEmail && (
           <div className="rounded-lg border border-yellow-400/25 bg-yellow-400/10 p-3 space-y-3">
