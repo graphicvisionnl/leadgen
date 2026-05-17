@@ -358,7 +358,6 @@ export async function POST(request: NextRequest) {
       email: inspection.email,
       city,
       niche,
-      segment: 'ideal',
       status: 'qualified',
       qualify_reason: `Handmatig toegevoegd. Website bekeken: ${inspection.painpoint}`,
       lead_score: 85,
